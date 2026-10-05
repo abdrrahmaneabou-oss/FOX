@@ -33,6 +33,7 @@ def audit(baseline, final):
     original = Path("work/project/input/FOX_ORIGINAL.apk")
     with zipfile.ZipFile(original) as legacy, zipfile.ZipFile(original, metadata_encoding="utf-8") as correct:
         restored_names = {old.filename: new.filename for old, new in zip(legacy.infolist(), correct.infolist()) if old.filename != new.filename}
+        original_resources = {new: correct.read(new) for new in restored_names.values()}
     with zipfile.ZipFile(baseline) as before, zipfile.ZipFile(final) as after:
         unchanged = []
         for name in before.namelist():
@@ -45,6 +46,8 @@ def audit(baseline, final):
                 root = AXMLPrinter(after.read(name)).get_xml_obj()
                 assert root.get("package") == "com.fox.onev8"
             assert expected == after.read(restored_names.get(name, name)), name
+            if name in restored_names:
+                assert expected == original_resources[restored_names[name]], "Original resource bytes changed"
             unchanged.append(name)
         old, new = methods(before), methods(after)
         assert old.keys() == new.keys(), "Method inventory changed"
@@ -77,4 +80,4 @@ if __name__ == "__main__":
     a = p.parse_args()
     report = audit(a.baseline, a.final)
     a.report.write_text(json.dumps(report, indent=2))
-    print("PASS: only two startup methods and original package identity changed; all other methods, libraries and assets preserved.")
+    print("PASS: only two startup methods, package identity and original ZIP names changed; resource bytes and network logic preserved.")
