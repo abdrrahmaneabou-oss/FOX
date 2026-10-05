@@ -8,6 +8,7 @@ from pathlib import Path
 from loguru import logger
 logger.remove()
 from androguard.core.dex import DEX
+from androguard.core.axml import AXMLPrinter
 
 ALLOWED = {
     ("Lcom/ponie/dayov12/LoginActivity;", "onCreate", "(Landroid/os/Bundle;)V"),
@@ -34,7 +35,13 @@ def audit(baseline, final):
         for name in before.namelist():
             if name in ("classes.dex", "classes2.dex") or name.upper().startswith("META-INF/"):
                 continue
-            assert before.read(name) == after.read(name), name
+            expected = before.read(name)
+            if name == "AndroidManifest.xml":
+                for encoding in ("utf-8", "utf-16le"):
+                    expected = expected.replace("com.fox.awg12".encode(encoding), "com.fox.onev8".encode(encoding))
+                root = AXMLPrinter(after.read(name)).get_xml_obj()
+                assert root.get("package") == "com.fox.onev8"
+            assert expected == after.read(name), name
             unchanged.append(name)
         old, new = methods(before), methods(after)
         assert old.keys() == new.keys(), "Method inventory changed"
@@ -53,7 +60,8 @@ def audit(baseline, final):
                 create = next(i for i, (_, operand) in enumerate(instructions) if "foxOriginalOnCreate" in operand)
                 assert put < create
         return {"changed_methods": [list(k) for k in sorted(changed)], "unchanged_method_count": len(old)-2,
-                "unchanged_apk_entry_count": len(unchanged), "native_and_packet_logic_unchanged": True,
+                "verified_apk_entry_count": len(unchanged), "native_and_packet_logic_unchanged": True,
+                "restored_package": "com.fox.onev8", "manifest_changes": "package and matching provider authority strings only",
                 "sha256": hashlib.sha256(final.read_bytes()).hexdigest(), "device_tested": False}
 
 
@@ -65,4 +73,4 @@ if __name__ == "__main__":
     a = p.parse_args()
     report = audit(a.baseline, a.final)
     a.report.write_text(json.dumps(report, indent=2))
-    print("PASS: only two startup methods changed; all other methods, libraries, manifest and assets preserved.")
+    print("PASS: only two startup methods and original package identity changed; all other methods, libraries and assets preserved.")

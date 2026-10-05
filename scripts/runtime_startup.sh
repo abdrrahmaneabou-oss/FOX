@@ -9,7 +9,8 @@ for fox_kind in original fixed; do
     fox_package=com.fox.onev8
   else
     fox_apk=runtime-apk/FOX_AWG_Fixed.apk
-    fox_package=com.fox.awg12
+    fox_package=com.fox.onev8
+    adb uninstall com.fox.onev8 > runtime-results/remove-original.txt 2>&1 || true
   fi
   adb install -r "$fox_apk" > "runtime-results/$fox_kind-install.txt" 2>&1 || true
   adb logcat -c
@@ -21,11 +22,11 @@ for fox_kind in original fixed; do
   adb shell pidof "$fox_package" > "runtime-results/$fox_kind-pid.txt" || true
   echo "==== $fox_kind ===="
   cat "runtime-results/$fox_kind-install.txt" "runtime-results/$fox_kind-start.txt" "runtime-results/$fox_kind-pid.txt"
-  rg -n -A 35 'FATAL EXCEPTION|Fatal signal|Unable to instantiate|Unable to start|Caused by:' "runtime-results/$fox_kind-logcat.txt" || true
+  grep -n -A 35 -E 'FATAL EXCEPTION|Fatal signal|Unable to instantiate|Unable to start|Caused by:' "runtime-results/$fox_kind-logcat.txt" || true
   adb shell am force-stop "$fox_package"
 done
 test -s runtime-results/fixed-pid.txt
-rg 'com.fox.awg12/com.ponie.dayov12.MainActivity' runtime-results/fixed-activities.txt
-if rg -q 'FATAL EXCEPTION|Fatal signal' runtime-results/fixed-logcat.txt; then
+grep 'com.fox.onev8/com.ponie.dayov12.MainActivity' runtime-results/fixed-activities.txt
+if grep -q -E 'FATAL EXCEPTION|Fatal signal' runtime-results/fixed-logcat.txt; then
   exit 1
 fi
