@@ -20,6 +20,9 @@ for fox_kind in original fixed; do
   adb shell dumpsys activity activities > "runtime-results/$fox_kind-activities.txt"
   adb shell dumpsys activity exit-info "$fox_package" > "runtime-results/$fox_kind-exit-info.txt" || true
   adb shell pidof "$fox_package" > "runtime-results/$fox_kind-pid.txt" || true
+  adb exec-out screencap -p > "runtime-results/$fox_kind-screen.png"
+  adb shell uiautomator dump /sdcard/fox-startup-ui.xml > "runtime-results/$fox_kind-ui-dump.txt" 2>&1 || true
+  adb pull /sdcard/fox-startup-ui.xml "runtime-results/$fox_kind-ui.xml" > /dev/null 2>&1 || true
   echo "==== $fox_kind ===="
   cat "runtime-results/$fox_kind-install.txt" "runtime-results/$fox_kind-start.txt" "runtime-results/$fox_kind-pid.txt"
   grep -n -A 35 -E 'FATAL EXCEPTION|Fatal signal|Unable to instantiate|Unable to start|Caused by:' "runtime-results/$fox_kind-logcat.txt" || true
@@ -27,6 +30,7 @@ for fox_kind in original fixed; do
 done
 test -s runtime-results/fixed-pid.txt
 grep 'com.fox.onev8/com.ponie.dayov12.MainActivity' runtime-results/fixed-activities.txt
+grep 'AWG' runtime-results/fixed-ui.xml
 if grep -q -E 'FATAL EXCEPTION|Fatal signal' runtime-results/fixed-logcat.txt; then
   exit 1
 fi

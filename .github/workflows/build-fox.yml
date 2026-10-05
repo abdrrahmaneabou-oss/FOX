@@ -68,6 +68,10 @@ jobs:
     needs: build
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        api: [35, 36]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -86,7 +90,7 @@ jobs:
       - name: Launch original and fixed APKs on Android
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 35
+          api-level: ${{ matrix.api }}
           target: google_apis
           arch: x86_64
           profile: pixel_7
@@ -96,7 +100,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: FOX-startup-diagnostics
+          name: FOX-startup-diagnostics-${{ matrix.api }}
           path: runtime-results/
           if-no-files-found: warn
           retention-days: 30
