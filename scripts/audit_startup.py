@@ -14,6 +14,7 @@ ALLOWED = {
     ("Lcom/ponie/dayov12/LoginActivity;", "onCreate", "(Landroid/os/Bundle;)V"),
     ("Lcom/ponie/dayov12/MainActivity;", "onCreate", "(Landroid/os/Bundle;)V"),
 }
+GATE = ("Lcom/ponie/dayov12/MainActivity;", "foxOriginalOnCreate", "(Landroid/os/Bundle;)V")
 
 
 def methods(archive):
@@ -52,7 +53,13 @@ def audit(baseline, final):
         old, new = methods(before), methods(after)
         assert old.keys() == new.keys(), "Method inventory changed"
         changed = {key for key in old if old[key] != new[key]}
-        assert changed == ALLOWED, changed
+        assert changed == ALLOWED | {GATE}, changed
+        old_registers, old_instructions = old[GATE]
+        gate_indices = [i for i, (_, operand) in enumerate(old_instructions) if "۟۟ۦۥۢ;->۟ۦ۟ۦۥ(Ljava/lang/Object;)" in operand]
+        assert len(gate_indices) == 1
+        expected_instructions = list(old_instructions)
+        expected_instructions[gate_indices[0]] = ("nop", "")
+        assert new[GATE] == (old_registers, expected_instructions), "Changes outside access-key dialog call"
         for key in ALLOWED:
             registers, instructions = new[key]
             operands = "\n".join(operand for _, operand in instructions)
@@ -65,7 +72,7 @@ def audit(baseline, final):
                 put = next(i for i, (_, operand) in enumerate(instructions) if "putExtra" in operand)
                 create = next(i for i, (_, operand) in enumerate(instructions) if "foxOriginalOnCreate" in operand)
                 assert put < create
-        return {"changed_methods": [list(k) for k in sorted(changed)], "unchanged_method_count": len(old)-2,
+        return {"changed_methods": [list(k) for k in sorted(changed)], "unchanged_method_count": len(old)-3,
                 "verified_apk_entry_count": len(unchanged), "native_and_packet_logic_unchanged": True,
                 "restored_package": "com.fox.onev8", "manifest_changes": "package and matching provider authority strings only",
                 "zip_resource_names_restored": len(restored_names),
@@ -80,4 +87,4 @@ if __name__ == "__main__":
     a = p.parse_args()
     report = audit(a.baseline, a.final)
     a.report.write_text(json.dumps(report, indent=2))
-    print("PASS: only two startup methods, package identity and original ZIP names changed; resource bytes and network logic preserved.")
+    print("PASS: startup handshake and single key-dialog call repaired; original resource bytes and network logic preserved.")

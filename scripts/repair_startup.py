@@ -51,6 +51,12 @@ def repair(root):
             assert "MainActivity;" in matches[0].group()
             assert "setContentView" not in matches[0].group()
         after = pattern.sub(lambda _: replacement, before, count=1)
+        if name == "MainActivity":
+            # This wrapper only displays DevModz's separate access-key dialog.
+            # It runs before Activity.onCreate and hides the initialized main UI.
+            gate = "invoke-static/range {p0 .. p0}, Lcom/ponie/dayov12/۟۟ۦۥۢ;->۟ۦ۟ۦۥ(Ljava/lang/Object;)V"
+            assert after.count(gate) == 1
+            after = after.replace(gate, "nop", 1)
         path.write_text(after)
         changes.append({"file": str(path.relative_to(root)), "before": hashlib.sha256(before.encode()).hexdigest(), "after": hashlib.sha256(after.encode()).hexdigest()})
     return changes
