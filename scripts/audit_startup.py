@@ -30,6 +30,9 @@ def methods(archive):
 
 
 def audit(baseline, final):
+    original = Path("work/project/input/FOX_ORIGINAL.apk")
+    with zipfile.ZipFile(original) as legacy, zipfile.ZipFile(original, metadata_encoding="utf-8") as correct:
+        restored_names = {old.filename: new.filename for old, new in zip(legacy.infolist(), correct.infolist()) if old.filename != new.filename}
     with zipfile.ZipFile(baseline) as before, zipfile.ZipFile(final) as after:
         unchanged = []
         for name in before.namelist():
@@ -41,7 +44,7 @@ def audit(baseline, final):
                     expected = expected.replace("com.fox.awg12".encode(encoding), "com.fox.onev8".encode(encoding))
                 root = AXMLPrinter(after.read(name)).get_xml_obj()
                 assert root.get("package") == "com.fox.onev8"
-            assert expected == after.read(name), name
+            assert expected == after.read(restored_names.get(name, name)), name
             unchanged.append(name)
         old, new = methods(before), methods(after)
         assert old.keys() == new.keys(), "Method inventory changed"
@@ -62,6 +65,7 @@ def audit(baseline, final):
         return {"changed_methods": [list(k) for k in sorted(changed)], "unchanged_method_count": len(old)-2,
                 "verified_apk_entry_count": len(unchanged), "native_and_packet_logic_unchanged": True,
                 "restored_package": "com.fox.onev8", "manifest_changes": "package and matching provider authority strings only",
+                "zip_resource_names_restored": len(restored_names),
                 "sha256": hashlib.sha256(final.read_bytes()).hexdigest(), "device_tested": False}
 
 

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Repair startup DEX and restore the identity expected by NP resource loader."""
 import argparse
+import copy
 import zipfile
 from pathlib import Path
 
@@ -9,6 +10,9 @@ p.add_argument("baseline", type=Path)
 p.add_argument("rebuilt", type=Path)
 p.add_argument("output", type=Path)
 a = p.parse_args()
+original = Path("work/project/input/FOX_ORIGINAL.apk")
+with zipfile.ZipFile(original) as legacy, zipfile.ZipFile(original, metadata_encoding="utf-8") as correct:
+    restored_names = {old.filename: new.filename for old, new in zip(legacy.infolist(), correct.infolist()) if old.filename != new.filename}
 with zipfile.ZipFile(a.baseline) as before, zipfile.ZipFile(a.rebuilt) as rebuilt, zipfile.ZipFile(a.output, "w") as after:
     for entry in before.infolist():
         name = entry.filename
@@ -21,6 +25,10 @@ with zipfile.ZipFile(a.baseline) as before, zipfile.ZipFile(a.rebuilt) as rebuil
             assert old.encode("utf-16le") in data or old.encode() in data
             for encoding in ("utf-8", "utf-16le"):
                 data = data.replace(old.encode(encoding), new.encode(encoding))
-        after.writestr(entry, data)
+        target = copy.copy(entry)
+        if name in restored_names:
+            target.filename = restored_names[name]
+            target.orig_filename = target.filename
+        after.writestr(target, data)
 with zipfile.ZipFile(a.output) as check:
     assert check.testzip() is None
