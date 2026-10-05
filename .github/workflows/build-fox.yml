@@ -24,6 +24,9 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: android-actions/setup-android@v3
+        with:
+          packages: 'build-tools;35.0.0'
+          log-accepted-android-sdk-licenses: false
       - name: Prepare verified inputs and build tools
         shell: bash
         run: |
@@ -33,7 +36,6 @@ jobs:
           unzip -q FOX_AWG_Private_Project.zip -d work/project
           curl --fail --location --retry 3 --output work/tools/apktool.jar https://github.com/iBotPeaches/Apktool/releases/download/v2.12.1/apktool_2.12.1.jar
           printf '%s\n' '66cf4524a4a45a7f56567d08b2c9b6ec237bcdd78cee69fd4a59c8a0243aeafa  work/tools/apktool.jar' | sha256sum -c -
-          sdkmanager 'build-tools;35.0.0'
           python3 -m pip install 'androguard==4.1.3'
       - name: Repair startup and rebuild Smali
         shell: bash
