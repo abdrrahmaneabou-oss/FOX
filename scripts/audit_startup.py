@@ -58,7 +58,7 @@ def audit(baseline, final):
         gate_indices = [i for i, (_, operand) in enumerate(old_instructions) if "۟۟ۦۥۢ;->۟ۦ۟ۦۥ(Ljava/lang/Object;)" in operand]
         assert len(gate_indices) == 1
         expected_instructions = list(old_instructions)
-        expected_instructions[gate_indices[0]] = ("nop", "")
+        expected_instructions[gate_indices[0]:gate_indices[0]+1] = [("nop", "")] * 3
         assert new[GATE] == (old_registers, expected_instructions), "Changes outside access-key dialog call"
         for key in ALLOWED:
             registers, instructions = new[key]

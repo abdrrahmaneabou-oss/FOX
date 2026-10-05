@@ -56,7 +56,8 @@ def repair(root):
             # It runs before Activity.onCreate and hides the initialized main UI.
             gate = "invoke-static/range {p0 .. p0}, Lcom/ponie/dayov12/۟۟ۦۥۢ;->۟ۦ۟ۦۥ(Ljava/lang/Object;)V"
             assert after.count(gate) == 1
-            after = after.replace(gate, "nop", 1)
+            # Preserve the original three-code-unit width and all branch offsets.
+            after = after.replace(gate, "nop\n    nop\n    nop", 1)
         path.write_text(after)
         changes.append({"file": str(path.relative_to(root)), "before": hashlib.sha256(before.encode()).hexdigest(), "after": hashlib.sha256(after.encode()).hexdigest()})
     return changes
