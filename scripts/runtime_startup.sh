@@ -3,6 +3,8 @@ set -euo pipefail
 mkdir -p runtime-results runtime-original
 unzip -q FOX_AWG_Private_Project.zip input/FOX_ORIGINAL.apk -d runtime-original
 adb shell getprop > runtime-results/device-properties.txt
+adb root > runtime-results/adb-root.txt 2>&1 || true
+adb wait-for-device
 for fox_kind in original fixed; do
   if [[ "$fox_kind" == original ]]; then
     fox_apk=runtime-original/input/FOX_ORIGINAL.apk
@@ -23,6 +25,8 @@ for fox_kind in original fixed; do
   adb exec-out screencap -p > "runtime-results/$fox_kind-screen.png"
   adb shell uiautomator dump /sdcard/fox-startup-ui.xml > "runtime-results/$fox_kind-ui-dump.txt" 2>&1 || true
   adb pull /sdcard/fox-startup-ui.xml "runtime-results/$fox_kind-ui.xml" > /dev/null 2>&1 || true
+  adb shell find "/data/user/0/$fox_package" -type f > "runtime-results/$fox_kind-data-files.txt" 2>&1 || true
+  adb pull "/data/user/0/$fox_package" "runtime-results/$fox_kind-app-data" > "runtime-results/$fox_kind-data-pull.txt" 2>&1 || true
   echo "==== $fox_kind ===="
   cat "runtime-results/$fox_kind-install.txt" "runtime-results/$fox_kind-start.txt" "runtime-results/$fox_kind-pid.txt"
   grep -n -A 35 -E 'FATAL EXCEPTION|Fatal signal|Unable to instantiate|Unable to start|Caused by:' "runtime-results/$fox_kind-logcat.txt" || true
