@@ -60,6 +60,14 @@ def repair(root):
             after = after.replace(gate, "nop\n    nop\n    nop", 1)
         path.write_text(after)
         changes.append({"file": str(path.relative_to(root)), "before": hashlib.sha256(before.encode()).hexdigest(), "after": hashlib.sha256(after.encode()).hexdigest()})
+    # Suppress only the remote update dialog invocation; retain fetch and checks.
+    path = root / "smali/androidx/work/impl/workers/ExpDialog$FetchUpdateConfigTask.smali"
+    before = path.read_text()
+    call = "invoke-static {v0, p1}, Landroidx/work/impl/workers/ExpDialog;->-$$Nest$smshowStyledDialog(Landroid/app/Activity;Lorg/json/JSONObject;)V"
+    assert before.count(call) == 1, "Unexpected update dialog implementation"
+    after = before.replace(call, "nop\n    nop\n    nop", 1)
+    path.write_text(after)
+    changes.append({"file": str(path.relative_to(root)), "before": hashlib.sha256(before.encode()).hexdigest(), "after": hashlib.sha256(after.encode()).hexdigest()})
     return changes
 
 

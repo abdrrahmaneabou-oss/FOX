@@ -15,6 +15,7 @@ ALLOWED = {
     ("Lcom/ponie/dayov12/MainActivity;", "onCreate", "(Landroid/os/Bundle;)V"),
 }
 GATE = ("Lcom/ponie/dayov12/MainActivity;", "foxOriginalOnCreate", "(Landroid/os/Bundle;)V")
+UPDATE = ("Landroidx/work/impl/workers/ExpDialog$FetchUpdateConfigTask;", "onPostExecute", "(Lorg/json/JSONObject;)V")
 
 
 def methods(archive):
@@ -53,7 +54,13 @@ def audit(baseline, final):
         old, new = methods(before), methods(after)
         assert old.keys() == new.keys(), "Method inventory changed"
         changed = {key for key in old if old[key] != new[key]}
-        assert changed == ALLOWED | {GATE}, changed
+        assert changed == ALLOWED | {GATE, UPDATE}, changed
+        update_registers, update_instructions = old[UPDATE]
+        update_indices = [i for i, (op, operand) in enumerate(update_instructions) if op == "invoke-static" and "ExpDialog;->-$$Nest$smshowStyledDialog" in operand]
+        assert len(update_indices) == 1
+        expected_update = list(update_instructions)
+        expected_update[update_indices[0]:update_indices[0]+1] = [("nop", "")] * 3
+        assert new[UPDATE] == (update_registers, expected_update), "Changes outside update dialog invocation"
         old_registers, old_instructions = old[GATE]
         gate_indices = [i for i, (_, operand) in enumerate(old_instructions) if "۟۟ۦۥۢ;->۟ۦ۟ۦۥ(Ljava/lang/Object;)" in operand]
         assert len(gate_indices) == 1
@@ -72,7 +79,8 @@ def audit(baseline, final):
                 put = next(i for i, (_, operand) in enumerate(instructions) if "putExtra" in operand)
                 create = next(i for i, (_, operand) in enumerate(instructions) if "foxOriginalOnCreate" in operand)
                 assert put < create
-        return {"changed_methods": [list(k) for k in sorted(changed)], "unchanged_method_count": len(old)-3,
+        return {"changed_methods": [list(k) for k in sorted(changed)], "unchanged_method_count": len(old)-len(changed),
+                "remote_update_dialog_suppressed": True,
                 "verified_apk_entry_count": len(unchanged), "native_and_packet_logic_unchanged": True,
                 "restored_package": "com.fox.onev8", "manifest_changes": "package and matching provider authority strings only",
                 "zip_resource_names_restored": len(restored_names),
