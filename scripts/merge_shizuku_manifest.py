@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Merge the Shizuku AAR manifest entries into FOX's decoded manifest.
+"""Merge Shizuku manifest metadata into FOX's decoded manifest.
 
 This project deliberately builds without Gradle, so AAR manifest merging has to be
-performed explicitly. Only Shizuku top-level permissions and application children
-(provider/meta-data) are copied; FOX's existing components remain untouched.
+performed explicitly. Shizuku's provider AAR does not register ShizukuProvider in
+its own manifest; the client application is expected to declare it. We therefore
+merge the library permissions/meta-data and add the provider exactly as documented
+by Shizuku.
 """
 import argparse
 import copy
@@ -25,6 +27,32 @@ def substitute(node, application_id):
         for attr, value in list(element.attrib.items()):
             element.attrib[attr] = value.replace("${applicationId}", application_id)
     return out
+
+
+def ensure_shizuku_provider(app, application_id):
+    providers = [
+        n for n in list(app)
+        if n.tag.split('}')[-1] == "provider"
+        and n.attrib.get(NAME) == "rikka.shizuku.ShizukuProvider"
+    ]
+    if len(providers) > 1:
+        raise RuntimeError("Multiple ShizukuProvider declarations in target manifest")
+
+    if not providers:
+        provider = ET.Element("provider")
+        provider.set(NAME, "rikka.shizuku.ShizukuProvider")
+        provider.set("{%s}authorities" % ANDROID, application_id + ".shizuku")
+        provider.set("{%s}enabled" % ANDROID, "true")
+        provider.set("{%s}exported" % ANDROID, "true")
+        provider.set("{%s}multiprocess" % ANDROID, "false")
+        provider.set("{%s}permission" % ANDROID, "android.permission.INTERACT_ACROSS_USERS_FULL")
+        app.append(provider)
+        providers = [provider]
+
+    provider = providers[0]
+    authority = provider.attrib.get("{%s}authorities" % ANDROID, "")
+    if authority != application_id + ".shizuku":
+        raise RuntimeError("ShizukuProvider authority is not bound to FOX package")
 
 
 def merge(target_path, library_paths):
@@ -58,18 +86,7 @@ def merge(target_path, library_paths):
                     root.insert(index, merged)
                     top_keys.add(key(merged))
 
-    providers = [
-        n for n in list(app)
-        if n.tag.split('}')[-1] == "provider"
-        and n.attrib.get(NAME) == "rikka.shizuku.ShizukuProvider"
-    ]
-    if len(providers) != 1:
-        raise RuntimeError("Expected exactly one ShizukuProvider after merge")
-
-    authority = providers[0].attrib.get("{%s}authorities" % ANDROID, "")
-    if application_id not in authority:
-        raise RuntimeError("ShizukuProvider authority is not bound to FOX package")
-
+    ensure_shizuku_provider(app, application_id)
     tree.write(target_path, encoding="utf-8", xml_declaration=True)
 
 
