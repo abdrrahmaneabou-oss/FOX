@@ -11,7 +11,7 @@ import com.ponie.dayov12.FoxConfigStore;
 import com.ponie.dayov12.FoxTransport;
 import com.ponie.dayov12.MyVpnService;
 
-/** Explicit user-driven AmneziaWG connection card. Opening the dashboard never starts or stops VPN. */
+/** Explicit user-driven AmneziaWG and Shizuku connection controls. */
 public final class FoxConnectionCard {
     public static final int VPN_PERMISSION_REQUEST = 17440;
     private static final int CONNECTED = 0xff43d17a;
@@ -19,12 +19,15 @@ public final class FoxConnectionCard {
     private final FoxTheme theme;
     private final Runnable beforeDisconnect;
     private final TextView status, config, connectButton;
+    private final TextView shizukuStatus, shizukuButton;
+    private final FreezeAnalogManager analogManager;
     public final LinearLayout view;
 
     public FoxConnectionCard(Activity activity, FoxTheme theme, Runnable beforeDisconnect) {
         this.activity = activity;
         this.theme = theme;
         this.beforeDisconnect = beforeDisconnect;
+        this.analogManager = FreezeAnalogManager.get(activity);
         view = theme.card();
         theme.add(view, theme.text("AMNEZIAWG", 11, FoxTheme.ACCENT, true), 0);
         theme.add(view, theme.text("Connection", 22, FoxTheme.TEXT, true), 8);
@@ -45,9 +48,26 @@ public final class FoxConnectionCard {
         TextView detailsButton = theme.button("Details", false);
         theme.add(view, detailsButton, 8);
 
+        LinearLayout shizukuCard = theme.card();
+        shizukuCard.setPadding(theme.dp(14), theme.dp(14), theme.dp(14), theme.dp(14));
+        theme.add(shizukuCard, theme.text("SHIZUKU INPUT", 11, FoxTheme.ACCENT, true), 0);
+        theme.add(shizukuCard, theme.text("Privileged touch engine", 18, FoxTheme.TEXT, true), 7);
+        theme.add(shizukuCard, theme.text(
+                "Connect FOX to Shizuku before enabling the Freeze analog.",
+                12, FoxTheme.MUTED, false), 7);
+        shizukuStatus = theme.text("Checking Shizuku…", 13, FoxTheme.MUTED, false);
+        theme.add(shizukuCard, shizukuStatus, 10);
+        shizukuButton = theme.button("CONNECT SHIZUKU", false);
+        theme.add(shizukuCard, shizukuButton, 10);
+        theme.add(view, shizukuCard, 16);
+
         connectButton.setOnClickListener(v -> toggleConnection());
         importButton.setOnClickListener(v -> ConfigImportController.choose(activity));
         detailsButton.setOnClickListener(v -> showDetails());
+        shizukuButton.setOnClickListener(v -> {
+            analogManager.connectShizuku();
+            refreshShizuku();
+        });
         refresh();
     }
 
@@ -66,6 +86,29 @@ public final class FoxConnectionCard {
         connectButton.setTextColor(connected ? FoxTheme.BG : FoxTheme.TEXT);
         connectButton.setBackground(theme.surface(connected ? CONNECTED : 0xff202431, 12));
         connectButton.setContentDescription(connected ? "Disconnect AmneziaWG" : "Connect AmneziaWG");
+        refreshShizuku();
+    }
+
+    private void refreshShizuku() {
+        int state = analogManager.getShizukuState();
+        boolean ready = state == ShizukuInputBridge.READY;
+        if (ready) {
+            int kind = analogManager.getShizukuBackendKind();
+            setText(shizukuStatus, kind == 2
+                    ? "Connected • REDMAGIC direct Binder engine"
+                    : "Connected • REDMAGIC virtualTouchEvent engine");
+        } else if (state == ShizukuInputBridge.DENIED) {
+            setText(shizukuStatus, "Permission denied • allow FOX inside Shizuku");
+        } else if (state == ShizukuInputBridge.WAITING) {
+            setText(shizukuStatus, "Waiting for Shizuku permission / UserService");
+        } else {
+            setText(shizukuStatus, "Shizuku is not running");
+        }
+        shizukuStatus.setTextColor(ready ? CONNECTED : FoxTheme.MUTED);
+        shizukuButton.setText(ready ? "SHIZUKU CONNECTED" : "CONNECT SHIZUKU");
+        shizukuButton.setTextColor(ready ? FoxTheme.BG : FoxTheme.TEXT);
+        shizukuButton.setBackground(theme.surface(ready ? CONNECTED : 0xff202431, 12));
+        shizukuButton.setContentDescription(ready ? "Shizuku touch engine connected" : "Connect FOX to Shizuku");
     }
 
     private void toggleConnection() {
