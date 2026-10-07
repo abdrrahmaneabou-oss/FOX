@@ -20,18 +20,15 @@ import java.util.List;
 public final class FoxDashboard implements Application.ActivityLifecycleCallbacks {
     private static final int START_ACTIVE = 0xffd84a4a;
     private static final int START_IDLE = 0xff202431;
-    private static final int ANALOG_ACTIVE = 0xff2f9d63;
-    private static final int ANALOG_IDLE = 0xff202431;
 
     private final Activity activity;
     private final FoxTheme theme;
     private final LegacyViews legacy;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private FoxConnectionCard connection;
+    private FreezeAnalogCard freezeAnalogCard;
     private TextView primary;
-    private TextView analogToggle;
     private FoxNavigation navigation;
-    private FreezeAnalogManager analogManager;
     private boolean active;
 
     private final Runnable refresh = new Runnable() {
@@ -39,6 +36,7 @@ public final class FoxDashboard implements Application.ActivityLifecycleCallback
             if (!active || activity.isDestroyed()) return;
             connection.refresh();
             navigation.refresh();
+            if (freezeAnalogCard != null) freezeAnalogCard.refresh();
 
             String label = primary.getText().toString();
             boolean sessionRunning = label.equals("STOP");
@@ -56,7 +54,6 @@ public final class FoxDashboard implements Application.ActivityLifecycleCallback
                 lastVpnConnected = vpnConnected;
                 paintPrimary(sessionRunning, vpnConnected);
             }
-            paintAnalog(analogManager != null && analogManager.isEnabled());
             handler.postDelayed(this, 250);
         }
     };
@@ -89,7 +86,7 @@ public final class FoxDashboard implements Application.ActivityLifecycleCallback
         }
 
         connection = new FoxConnectionCard(activity, theme, this::disableSessionBeforeDisconnect);
-        analogManager = FreezeAnalogManager.get(activity);
+        freezeAnalogCard = new FreezeAnalogCard(activity, theme);
 
         LinearLayout sessionCard = theme.card();
         theme.add(sessionCard, theme.text("CONTROL CENTER", 11, FoxTheme.ACCENT, true), 0);
@@ -109,25 +106,12 @@ public final class FoxDashboard implements Application.ActivityLifecycleCallback
         paintPrimary(primary.getText().toString().equals("STOP"), connection.isConnected());
         theme.add(sessionCard, primary, 6);
 
-        LinearLayout analogCard = theme.card();
-        theme.add(analogCard, theme.text("SYSTEM TEST", 11, FoxTheme.ACCENT, true), 0);
-        theme.add(analogCard, theme.text("Freeze analog", 22, FoxTheme.TEXT, true), 9);
-        theme.add(analogCard, theme.text("Independent hold-to-Freeze analog. Triple-tap the analog to open its hidden controls.", 13, FoxTheme.MUTED, false), 8);
-        analogToggle = theme.button("ENABLE ANALOG", false);
-        analogToggle.setOnClickListener(v -> {
-            boolean next = !analogManager.isEnabled();
-            analogManager.setEnabled(next);
-            paintAnalog(next);
-        });
-        theme.add(analogCard, analogToggle, 12);
-        paintAnalog(analogManager.isEnabled());
-
         homeColumn.removeAllViews();
         homeColumn.setPadding(theme.dp(18), theme.dp(8), theme.dp(18), theme.dp(24));
         homeColumn.setBackgroundColor(FoxTheme.BG);
         theme.add(homeColumn, sessionCard, 0);
         theme.add(homeColumn, connection.view, 14);
-        theme.add(homeColumn, analogCard, 14);
+        theme.add(homeColumn, freezeAnalogCard.view, 14);
         for (View child : retained) {
             quietStyle(child);
             theme.add(homeColumn, child, 14);
@@ -153,7 +137,7 @@ public final class FoxDashboard implements Application.ActivityLifecycleCallback
         navigation = new FoxNavigation(activity, theme, legacy);
         legacy.pauseDecoration();
         activity.getApplication().registerActivityLifecycleCallbacks(this);
-        android.util.Log.i("FoxUI", "Presentation installed; Freeze analog is wired into dashboard");
+        android.util.Log.i("FoxUI", "Presentation installed; Freeze Analog dashboard card is live");
     }
 
     private void disableSessionBeforeDisconnect() {
@@ -165,13 +149,6 @@ public final class FoxDashboard implements Application.ActivityLifecycleCallback
         int color = sessionRunning ? START_ACTIVE : START_IDLE;
         primary.setBackground(theme.surface(color, 14));
         primary.setTextColor(sessionRunning ? FoxTheme.TEXT : (vpnConnected ? FoxTheme.TEXT : FoxTheme.MUTED));
-    }
-
-    private void paintAnalog(boolean enabled) {
-        if (analogToggle == null) return;
-        analogToggle.setText(enabled ? "ANALOG ON" : "ENABLE ANALOG");
-        analogToggle.setTextColor(enabled ? FoxTheme.TEXT : FoxTheme.MUTED);
-        analogToggle.setBackground(theme.surface(enabled ? ANALOG_ACTIVE : ANALOG_IDLE, 12));
     }
 
     private void compactPreview(View view) {
