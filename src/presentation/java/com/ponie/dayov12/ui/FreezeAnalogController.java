@@ -12,34 +12,41 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
 
-/** Runtime state machine and visual layer for the independent hold-to-Freeze analog. */
+/**
+ * Two-window analog implementation:
+ * - the visual window is permanently NOT_TOUCHABLE;
+ * - the transparent capture window receives the physical gesture;
+ * - once DOWN is captured, the capture window is parked off-screen and the exact
+ *   DOWN/MOVE/UP stream is relayed through the user-authorized Shizuku bridge.
+ */
 final class FreezeAnalogController {
     interface SettingsRequestListener {
         void onFreezeAnalogSettingsRequested(FreezeAnalogController controller);
     }
 
-    interface TouchRelay {
-        void relay(MotionEvent event);
-    }
-
     private static final long TRIPLE_TAP_WINDOW_MS = 650L;
     private static final int INVALID_POINTER = -1;
+    private static final int PARK_DISTANCE_PX = 8192;
 
     private final Context context;
     private final WindowManager windowManager;
     private final LegacyFreezeBridge freeze;
     private final FreezeAnalogSettings settings;
-    private final AnalogView view;
+    private final ShizukuInputBridge inputBridge;
+    private final AnalogView visualView;
+    private final View captureView;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final float density;
     private final float tapSlopPx;
 
-    private WindowManager.LayoutParams params;
+    private WindowManager.LayoutParams visualParams;
+    private WindowManager.LayoutParams captureParams;
     private SettingsRequestListener settingsListener;
-    private TouchRelay touchRelay;
     private boolean shown;
     private boolean tracking;
     private boolean positionEdit;
+    private boolean captureParked;
+    private boolean gestureActivatesFreeze;
     private int pointerId = INVALID_POINTER;
     private float downX;
     private float downY;
@@ -47,15 +54,18 @@ final class FreezeAnalogController {
     private long firstTapTime;
     private int tapCount;
 
-    FreezeAnalogController(Context context) {
+    FreezeAnalogController(Context context, ShizukuInputBridge inputBridge) {
         this.context = context.getApplicationContext();
         this.windowManager = (WindowManager) this.context.getSystemService(Context.WINDOW_SERVICE);
         this.freeze = new LegacyFreezeBridge(this.context);
         this.settings = FreezeAnalogSettings.load(this.context);
+        this.inputBridge = inputBridge;
         this.density = this.context.getResources().getDisplayMetrics().density;
         this.tapSlopPx = 12f * density;
-        this.view = new AnalogView(this.context);
-        this.view.setOnTouchListener(new AnalogTouchListener());
+        this.visualView = new AnalogView(this.context);
+        this.captureView = new View(this.context);
+        this.captureView.setBackgroundColor(0x00000000);
+        this.captureView.setOnTouchListener(new CaptureTouchListener());
         rebuildParams();
     }
 
@@ -63,19 +73,23 @@ final class FreezeAnalogController {
         this.settingsListener = listener;
     }
 
-    void setTouchRelay(TouchRelay relay) {
-        this.touchRelay = relay;
-    }
-
-    synchronized void show() {
-        if (shown) return;
+    synchronized boolean show() {
+        if (shown) return true;
+        if (!inputBridge.isReady()) return false;
         rebuildParams();
         try {
-            windowManager.addView(view, params);
+            windowManager.addView(visualView, visualParams);
+            windowManager.addView(captureView, captureParams);
             shown = true;
-            view.postInvalidate();
-        } catch (RuntimeException e) {
-            android.util.Log.e("FreezeAnalog", "Cannot add analog overlay", e);
+            captureParked = false;
+            visualView.postInvalidate();
+            return true;
+        } catch (RuntimeException error) {
+            try { windowManager.removeView(captureView); } catch (RuntimeException ignored) {}
+            try { windowManager.removeView(visualView); } catch (RuntimeException ignored) {}
+            shown = false;
+            android.util.Log.e("FreezeAnalog", "Cannot add analog overlay", error);
+            return false;
         }
     }
 
@@ -83,60 +97,19 @@ final class FreezeAnalogController {
         cancelHold();
         positionEdit = false;
         if (!shown) return;
-        try { windowManager.removeView(view); }
-        catch (RuntimeException ignored) {}
+        try { windowManager.removeView(captureView); } catch (RuntimeException ignored) {}
+        try { windowManager.removeView(visualView); } catch (RuntimeException ignored) {}
         shown = false;
+        captureParked = false;
     }
 
     synchronized boolean isShown() { return shown; }
-
-    synchronized boolean onPointer(int action, int id, float rawX, float rawY, long eventTime) {
-        if (!shown || positionEdit) return false;
-        switch (action) {
-            case MotionEvent.ACTION_DOWN:
-            case MotionEvent.ACTION_POINTER_DOWN:
-                if (tracking || !contains(rawX, rawY)) return false;
-                tracking = true;
-                pointerId = id;
-                downX = rawX;
-                downY = rawY;
-                tapCandidate = true;
-                updateKnob(rawX, rawY);
-                freeze.setPressed(true);
-                return true;
-
-            case MotionEvent.ACTION_MOVE:
-                if (!tracking || id != pointerId) return false;
-                if (distance(rawX - downX, rawY - downY) > tapSlopPx) tapCandidate = false;
-                updateKnob(rawX, rawY);
-                return true;
-
-            case MotionEvent.ACTION_UP:
-            case MotionEvent.ACTION_POINTER_UP:
-                if (!tracking || id != pointerId) return false;
-                boolean tap = tapCandidate && contains(rawX, rawY);
-                finishHold();
-                if (tap) registerTap(eventTime);
-                return true;
-
-            case MotionEvent.ACTION_CANCEL:
-                if (!tracking || id != pointerId) return false;
-                finishHold();
-                tapCount = 0;
-                firstTapTime = 0L;
-                return true;
-
-            default:
-                return false;
-        }
-    }
 
     synchronized void setPositionEdit(boolean enabled) {
         if (positionEdit == enabled) return;
         cancelHold();
         positionEdit = enabled;
-        rebuildParams();
-        applyLayout();
+        restoreCaptureWindow();
     }
 
     synchronized boolean isPositionEdit() { return positionEdit; }
@@ -164,8 +137,8 @@ final class FreezeAnalogController {
         settings.knobDp = diameterDp;
         settings.normalize();
         if (persist) settings.save(context);
-        view.resetKnob();
-        view.postInvalidate();
+        visualView.resetKnob();
+        visualView.postInvalidate();
     }
 
     synchronized int getBaseX() { return settings.x; }
@@ -181,7 +154,6 @@ final class FreezeAnalogController {
     synchronized void shutdown() {
         hide();
         settingsListener = null;
-        touchRelay = null;
         mainHandler.removeCallbacksAndMessages(null);
     }
 
@@ -197,26 +169,34 @@ final class FreezeAnalogController {
         float knobRadius = px(settings.knobDp) / 2f;
         float centerX = settings.x + baseRadius;
         float centerY = settings.y + baseRadius;
-        FreezeAnalogGeometry.clamp(rawX - centerX, rawY - centerY, baseRadius, knobRadius, view.offset);
-        view.postInvalidate();
+        FreezeAnalogGeometry.clamp(
+                rawX - centerX,
+                rawY - centerY,
+                baseRadius,
+                knobRadius,
+                visualView.offset);
+        visualView.postInvalidate();
     }
 
     private void finishHold() {
-        freeze.setPressed(false);
+        if (gestureActivatesFreeze) freeze.setPressed(false);
         tracking = false;
+        gestureActivatesFreeze = false;
         pointerId = INVALID_POINTER;
         tapCandidate = false;
-        view.resetKnob();
-        view.postInvalidate();
+        visualView.resetKnob();
+        visualView.postInvalidate();
     }
 
     private void cancelHold() {
         freeze.forceOff();
         tracking = false;
+        gestureActivatesFreeze = false;
         pointerId = INVALID_POINTER;
         tapCandidate = false;
-        view.resetKnob();
-        view.postInvalidate();
+        visualView.resetKnob();
+        visualView.postInvalidate();
+        restoreCaptureWindow();
     }
 
     private void registerTap(long eventTime) {
@@ -240,23 +220,70 @@ final class FreezeAnalogController {
         int type = Build.VERSION.SDK_INT >= 26
                 ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
                 : WindowManager.LayoutParams.TYPE_PHONE;
-        int flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+
+        int common = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
                 | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
                 | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS;
-        WindowManager.LayoutParams next = new WindowManager.LayoutParams(
-                diameter, diameter, type, flags, android.graphics.PixelFormat.TRANSLUCENT);
-        next.gravity = Gravity.TOP | Gravity.START;
-        next.x = settings.x;
-        next.y = settings.y;
-        params = next;
+
+        visualParams = new WindowManager.LayoutParams(
+                diameter,
+                diameter,
+                type,
+                common | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+                android.graphics.PixelFormat.TRANSLUCENT);
+        visualParams.gravity = Gravity.TOP | Gravity.START;
+        visualParams.x = settings.x;
+        visualParams.y = settings.y;
+
+        captureParams = new WindowManager.LayoutParams(
+                diameter,
+                diameter,
+                type,
+                common,
+                android.graphics.PixelFormat.TRANSLUCENT);
+        captureParams.gravity = Gravity.TOP | Gravity.START;
+        captureParams.x = settings.x;
+        captureParams.y = settings.y;
     }
 
     private void applyLayout() {
-        view.resetKnob();
-        view.postInvalidate();
+        visualView.resetKnob();
+        visualView.postInvalidate();
         if (!shown) return;
-        try { windowManager.updateViewLayout(view, params); }
-        catch (RuntimeException e) { android.util.Log.e("FreezeAnalog", "Cannot update analog overlay", e); }
+        captureParked = false;
+        try { windowManager.updateViewLayout(visualView, visualParams); }
+        catch (RuntimeException error) { android.util.Log.e("FreezeAnalog", "Cannot update visual overlay", error); }
+        try { windowManager.updateViewLayout(captureView, captureParams); }
+        catch (RuntimeException error) { android.util.Log.e("FreezeAnalog", "Cannot update capture overlay", error); }
+    }
+
+    /** Move only the transparent input window away before injecting the duplicate DOWN. */
+    private void parkCaptureWindow() {
+        if (!shown || captureParked) return;
+        captureParams.x = -PARK_DISTANCE_PX - captureParams.width;
+        captureParams.y = -PARK_DISTANCE_PX - captureParams.height;
+        try {
+            windowManager.updateViewLayout(captureView, captureParams);
+            captureParked = true;
+        } catch (RuntimeException error) {
+            android.util.Log.e("FreezeAnalog", "Cannot park capture overlay", error);
+        }
+    }
+
+    private void restoreCaptureWindow() {
+        if (!shown || (!captureParked && captureParams.x == settings.x && captureParams.y == settings.y)) return;
+        captureParams.x = settings.x;
+        captureParams.y = settings.y;
+        try {
+            windowManager.updateViewLayout(captureView, captureParams);
+            captureParked = false;
+        } catch (RuntimeException error) {
+            android.util.Log.e("FreezeAnalog", "Cannot restore capture overlay", error);
+        }
+    }
+
+    private boolean relay(int action, long downTime, long eventTime, float rawX, float rawY) {
+        return inputBridge.inject(action, downTime, eventTime, rawX, rawY);
     }
 
     private float px(int dp) { return dp * density; }
@@ -269,66 +296,109 @@ final class FreezeAnalogController {
         return Math.max(min, Math.min(max, value));
     }
 
-    private final class AnalogTouchListener implements View.OnTouchListener {
+    private final class CaptureTouchListener implements View.OnTouchListener {
         private float editStartRawX;
         private float editStartRawY;
         private int editStartBaseX;
         private int editStartBaseY;
 
         @Override public boolean onTouch(View ignored, MotionEvent event) {
-            if (positionEdit) {
-                switch (event.getActionMasked()) {
-                    case MotionEvent.ACTION_DOWN:
-                        editStartRawX = event.getRawX();
-                        editStartRawY = event.getRawY();
-                        editStartBaseX = settings.x;
-                        editStartBaseY = settings.y;
-                        return true;
-                    case MotionEvent.ACTION_MOVE:
-                        setBasePosition(
-                                editStartBaseX + Math.round(event.getRawX() - editStartRawX),
-                                editStartBaseY + Math.round(event.getRawY() - editStartRawY),
-                                false);
-                        return true;
-                    case MotionEvent.ACTION_UP:
-                    case MotionEvent.ACTION_CANCEL:
-                        return true;
-                    default:
-                        return true;
-                }
-            }
+            if (positionEdit) return handlePositionEdit(event);
 
             final int action = event.getActionMasked();
-            final int actionIndex = event.getActionIndex();
-            final int id;
-            final float rawX;
-            final float rawY;
+            switch (action) {
+                case MotionEvent.ACTION_DOWN: {
+                    if (tracking) return true;
+                    pointerId = event.getPointerId(0);
+                    float rawX = event.getRawX();
+                    float rawY = event.getRawY();
+                    tracking = true;
+                    downX = rawX;
+                    downY = rawY;
+                    gestureActivatesFreeze = contains(rawX, rawY);
+                    tapCandidate = gestureActivatesFreeze;
+                    if (gestureActivatesFreeze) {
+                        updateKnob(rawX, rawY);
+                        freeze.setPressed(true);
+                    }
 
-            if (action == MotionEvent.ACTION_MOVE && tracking) {
-                int index = event.findPointerIndex(pointerId);
-                if (index < 0) return true;
-                id = pointerId;
-                rawX = event.getRawX(index);
-                rawY = event.getRawY(index);
-            } else {
-                id = event.getPointerId(actionIndex);
-                rawX = event.getRawX(actionIndex);
-                rawY = event.getRawY(actionIndex);
-            }
-
-            boolean handled = onPointer(action, id, rawX, rawY, event.getEventTime());
-
-            TouchRelay relay = touchRelay;
-            if (relay != null) {
-                MotionEvent copy = MotionEvent.obtain(event);
-                try { relay.relay(copy); }
-                catch (RuntimeException relayError) {
-                    android.util.Log.w("FreezeAnalog", "Touch relay rejected event", relayError);
-                } finally {
-                    copy.recycle();
+                    // Park before injecting DOWN so the duplicate starts on the window below.
+                    parkCaptureWindow();
+                    if (!relay(MotionEvent.ACTION_DOWN, event.getDownTime(), event.getEventTime(), rawX, rawY)) {
+                        android.util.Log.w("FreezeAnalog", "DOWN relay was not accepted");
+                    }
+                    return true;
                 }
+
+                case MotionEvent.ACTION_MOVE: {
+                    if (!tracking) return true;
+                    int index = event.findPointerIndex(pointerId);
+                    if (index < 0) return true;
+                    float rawX = event.getRawX(index);
+                    float rawY = event.getRawY(index);
+                    if (gestureActivatesFreeze) {
+                        if (distance(rawX - downX, rawY - downY) > tapSlopPx) tapCandidate = false;
+                        updateKnob(rawX, rawY);
+                    }
+                    relay(MotionEvent.ACTION_MOVE, event.getDownTime(), event.getEventTime(), rawX, rawY);
+                    return true;
+                }
+
+                case MotionEvent.ACTION_UP: {
+                    if (!tracking) return true;
+                    float rawX = event.getRawX();
+                    float rawY = event.getRawY();
+                    boolean tap = gestureActivatesFreeze && tapCandidate && contains(rawX, rawY);
+
+                    // Complete the injected stream before restoring the capture window.
+                    relay(MotionEvent.ACTION_UP, event.getDownTime(), event.getEventTime(), rawX, rawY);
+                    finishHold();
+                    if (tap) registerTap(event.getEventTime());
+                    restoreCaptureWindow();
+                    return true;
+                }
+
+                case MotionEvent.ACTION_CANCEL: {
+                    if (tracking) {
+                        float rawX = event.getRawX();
+                        float rawY = event.getRawY();
+                        relay(MotionEvent.ACTION_CANCEL, event.getDownTime(), event.getEventTime(), rawX, rawY);
+                    }
+                    finishHold();
+                    tapCount = 0;
+                    firstTapTime = 0L;
+                    restoreCaptureWindow();
+                    return true;
+                }
+
+                // The analog owns one physical pointer. Extra pointers are left untouched;
+                // the primary DOWN/MOVE/UP stream remains exact and continuous.
+                case MotionEvent.ACTION_POINTER_DOWN:
+                case MotionEvent.ACTION_POINTER_UP:
+                default:
+                    return true;
             }
-            return handled || tracking;
+        }
+
+        private boolean handlePositionEdit(MotionEvent event) {
+            switch (event.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    editStartRawX = event.getRawX();
+                    editStartRawY = event.getRawY();
+                    editStartBaseX = settings.x;
+                    editStartBaseY = settings.y;
+                    return true;
+                case MotionEvent.ACTION_MOVE:
+                    setBasePosition(
+                            editStartBaseX + Math.round(event.getRawX() - editStartRawX),
+                            editStartBaseY + Math.round(event.getRawY() - editStartRawY),
+                            false);
+                    return true;
+                case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_CANCEL:
+                default:
+                    return true;
+            }
         }
     }
 
