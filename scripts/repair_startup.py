@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
-"""Repair the two startup methods; keep all packet processing untouched."""
+"""Repair the known startup wrappers; keep packet processing untouched."""
 import argparse
 import hashlib
 import json
 import re
-import subprocess
-import sys
 from pathlib import Path
 
 LOGIN = '''.method protected onCreate(Landroid/os/Bundle;)V
@@ -46,7 +44,6 @@ def repair(root):
         pattern = re.compile(r"(?m)^\.method (?:protected|public) onCreate\(Landroid/os/Bundle;\)V\n.*?^\.end method", re.S)
         matches = list(pattern.finditer(before))
         assert len(matches) == 1, name
-        # Only patch our known experimental wrappers, never an unrelated APK.
         if name == "MainActivity":
             assert "foxOriginalOnCreate" in matches[0].group()
         else:
@@ -54,22 +51,27 @@ def repair(root):
             assert "setContentView" not in matches[0].group()
         after = pattern.sub(lambda _: replacement, before, count=1)
         if name == "MainActivity":
-            # This wrapper only displays DevModz's separate access-key dialog.
-            # It runs before Activity.onCreate and hides the initialized main UI.
             gate = "invoke-static/range {p0 .. p0}, Lcom/ponie/dayov12/۟۟ۦۥۢ;->۟ۦ۟ۦۥ(Ljava/lang/Object;)V"
             assert after.count(gate) == 1
-            # Preserve the original three-code-unit width and all branch offsets.
             after = after.replace(gate, "nop\n    nop\n    nop", 1)
         path.write_text(after)
-        changes.append({"file": str(path.relative_to(root)), "before": hashlib.sha256(before.encode()).hexdigest(), "after": hashlib.sha256(after.encode()).hexdigest()})
-    # Suppress only the remote update dialog invocation; retain fetch and checks.
+        changes.append({
+            "file": str(path.relative_to(root)),
+            "before": hashlib.sha256(before.encode()).hexdigest(),
+            "after": hashlib.sha256(after.encode()).hexdigest(),
+        })
+
     path = root / "smali/androidx/work/impl/workers/ExpDialog$FetchUpdateConfigTask.smali"
     before = path.read_text()
     call = "invoke-static {v0, p1}, Landroidx/work/impl/workers/ExpDialog;->-$$Nest$smshowStyledDialog(Landroid/app/Activity;Lorg/json/JSONObject;)V"
     assert before.count(call) == 1, "Unexpected update dialog implementation"
     after = before.replace(call, "nop\n    nop\n    nop", 1)
     path.write_text(after)
-    changes.append({"file": str(path.relative_to(root)), "before": hashlib.sha256(before.encode()).hexdigest(), "after": hashlib.sha256(after.encode()).hexdigest()})
+    changes.append({
+        "file": str(path.relative_to(root)),
+        "before": hashlib.sha256(before.encode()).hexdigest(),
+        "after": hashlib.sha256(after.encode()).hexdigest(),
+    })
     return changes
 
 
@@ -78,16 +80,4 @@ if __name__ == "__main__":
     parser.add_argument("decoded", type=Path)
     parser.add_argument("report", type=Path)
     args = parser.parse_args()
-
-    # Read-only discovery pass. Persist it beside the normal audit output so it
-    # survives GitHub Actions and can be inspected without changing legacy code.
-    inspector = Path("scripts/inspect_freeze.py")
-    if inspector.exists():
-        discovery = subprocess.run(
-            [sys.executable, str(inspector), str(args.decoded)],
-            check=True, text=True, capture_output=True,
-        ).stdout
-        print(discovery, end="")
-        (args.report.parent / "freeze-discovery.txt").write_text(discovery)
-
     args.report.write_text(json.dumps({"changed": repair(args.decoded)}, indent=2))
