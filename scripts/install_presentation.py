@@ -16,9 +16,10 @@ def install(decoded, source):
     if ui_dir.exists():
         shutil.rmtree(ui_dir)
 
-    # A previous build must never leave stale Shizuku runtime classes behind.
+    # A previous build must never leave stale Shizuku/Sui runtime classes behind.
     for runtime_dir in (
         decoded / 'smali_classes3/rikka/shizuku',
+        decoded / 'smali_classes3/rikka/sui',
         decoded / 'smali_classes3/moe/shizuku/api',
     ):
         if runtime_dir.exists():
@@ -32,6 +33,7 @@ def install(decoded, source):
             name.startswith('com/ponie/dayov12/ui/')
             or name.startswith('com/ponie/dayov12/FoxAwgUi')
             or name.startswith('rikka/shizuku/')
+            or name.startswith('rikka/sui/')
             or name.startswith('moe/shizuku/api/')
         )
         assert allowed, name
@@ -42,6 +44,7 @@ def install(decoded, source):
     assert copied > 0
     assert (decoded / 'smali_classes3/rikka/shizuku/Shizuku.smali').exists(), 'Shizuku runtime missing from DEX'
     assert (decoded / 'smali_classes3/rikka/shizuku/ShizukuProvider.smali').exists(), 'Shizuku provider runtime missing from DEX'
+    assert (decoded / 'smali_classes3/rikka/sui/Sui.smali').exists(), 'Sui runtime missing from DEX'
     assert (decoded / 'smali_classes3/moe/shizuku/api/BinderContainer.smali').exists(), 'Shizuku API BinderContainer missing from DEX'
 
     # Honor V12's existing reduced-motion path, avoiding continuous decorative loops.
