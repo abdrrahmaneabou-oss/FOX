@@ -21,7 +21,7 @@ def capture(name):
 
 def tap(tree, label):
     for node in tree.iter('node'):
-        if node.get('text') == label or node.get('content-desc') == label:
+        if node.get('text','').casefold() == label.casefold() or node.get('content-desc','').casefold() == label.casefold():
             x1,y1,x2,y2=map(int,re.findall(r'\d+',node.get('bounds')))
             adb('shell','input','tap',str((x1+x2)//2),str((y1+y2)//2))
             time.sleep(1)
@@ -47,11 +47,7 @@ home=capture('modern-import-cancelled');has(home,'Your session')
 tap(home,'Customize')
 custom=capture('modern-customize')
 has(custom,'FREEZE')
-# Press Home via its original navigation container even when the legacy tab hides the label.
-# The UI content-description on the TextView persists while the parent handles the click.
-node=next((n for n in custom.iter('node') if n.get('content-desc')=='Home'),None)
-if node is not None:
-    tap(custom,'Home');has(capture('modern-return-home'),'Your session')
+tap(custom,'Home');has(capture('modern-return-home'),'Your session')
 adb('shell','input','keyevent','3');time.sleep(1)
 adb('shell','am','start','-W','-n','com.fox.onev8/com.ponie.dayov12.MainActivity');time.sleep(1)
 capture('modern-resumed')

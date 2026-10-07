@@ -24,11 +24,13 @@ public final class FoxDashboard implements Application.ActivityLifecycleCallback
     private final Handler handler = new Handler(Looper.getMainLooper());
     private FoxConnectionCard connection;
     private TextView primary;
+    private FoxNavigation navigation;
     private boolean active;
     private final Runnable refresh = new Runnable() {
         @Override public void run() {
             if (!active || activity.isDestroyed()) return;
             connection.refresh();
+            navigation.refresh();
             // Original code updates the labels; only repaint the action's surface when required.
             String label = primary.getText().toString();
             if (!label.equals(lastAction)) {
@@ -94,6 +96,7 @@ public final class FoxDashboard implements Application.ActivityLifecycleCallback
         homeNav.setText("Home"); customizeNav.setText("Customize");
         homeNav.setTextSize(13); customizeNav.setTextSize(13);
         homeNav.setContentDescription("Home"); customizeNav.setContentDescription("Customize");
+        navigation = new FoxNavigation(activity, theme, legacy);
         // Existing navigation listeners and every setting listener remain attached.
         legacy.pauseDecoration();
         activity.getApplication().registerActivityLifecycleCallbacks(this);
