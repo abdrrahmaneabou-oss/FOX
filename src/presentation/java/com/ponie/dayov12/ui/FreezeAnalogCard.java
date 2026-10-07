@@ -2,7 +2,10 @@ package com.ponie.dayov12.ui;
 
 import android.app.Activity;
 import android.graphics.Typeface;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.Gravity;
+import android.view.View;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
@@ -16,6 +19,14 @@ final class FreezeAnalogCard {
     private final FreezeAnalogManager manager;
     private final TextView state;
     private final TextView button;
+    private final Handler handler = new Handler(Looper.getMainLooper());
+    private final Runnable refreshLoop = new Runnable() {
+        @Override public void run() {
+            if (!view.isAttachedToWindow()) return;
+            refresh();
+            handler.postDelayed(this, 350L);
+        }
+    };
 
     FreezeAnalogCard(Activity activity, FoxTheme theme) {
         this.theme = theme;
@@ -25,7 +36,7 @@ final class FreezeAnalogCard {
         theme.add(view, theme.text("FREEZE ANALOG", 11, FoxTheme.ACCENT, true), 0);
         theme.add(view, theme.text("Hold control", 22, FoxTheme.TEXT, true), 8);
         theme.add(view, theme.text(
-                "Press and hold the analog to enable Freeze. Release to disable it. Triple-tap the analog for its hidden editor.",
+                "Hold the analog to enable Freeze and release to disable it. Triple-tap the analog for its hidden editor.",
                 12, FoxTheme.MUTED, false), 8);
 
         state = theme.text("OFF", 12, FoxTheme.MUTED, true);
@@ -42,16 +53,41 @@ final class FreezeAnalogCard {
             refresh();
         });
         theme.add(view, button, 8);
+
+        view.addOnAttachStateChangeListener(new View.OnAttachStateChangeListener() {
+            @Override public void onViewAttachedToWindow(View v) {
+                handler.removeCallbacks(refreshLoop);
+                handler.post(refreshLoop);
+            }
+            @Override public void onViewDetachedFromWindow(View v) {
+                handler.removeCallbacks(refreshLoop);
+            }
+        });
         refresh();
     }
 
     void refresh() {
-        boolean enabled = manager.isEnabled();
-        state.setText(enabled ? "ON" : "OFF");
-        state.setTextColor(enabled ? ON : FoxTheme.MUTED);
-        button.setText(enabled ? "DISABLE" : "ENABLE");
-        button.setBackground(theme.surface(enabled ? ON : OFF, 12));
+        boolean active = manager.isActive();
+        boolean waiting = manager.isWaitingForInput();
+        if (active) {
+            state.setText("ON");
+            state.setTextColor(ON);
+            button.setText("DISABLE");
+            button.setBackground(theme.surface(ON, 12));
+            button.setContentDescription("Disable Freeze Analog");
+        } else if (waiting) {
+            state.setText("WAITING FOR SHIZUKU");
+            state.setTextColor(FoxTheme.ACCENT);
+            button.setText("CANCEL");
+            button.setBackground(theme.surface(OFF, 12));
+            button.setContentDescription("Cancel Freeze Analog activation");
+        } else {
+            state.setText("OFF");
+            state.setTextColor(FoxTheme.MUTED);
+            button.setText("ENABLE");
+            button.setBackground(theme.surface(OFF, 12));
+            button.setContentDescription("Enable Freeze Analog");
+        }
         button.setTextColor(FoxTheme.TEXT);
-        button.setContentDescription(enabled ? "Disable Freeze Analog" : "Enable Freeze Analog");
     }
 }
