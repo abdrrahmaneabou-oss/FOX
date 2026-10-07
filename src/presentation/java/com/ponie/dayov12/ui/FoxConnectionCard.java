@@ -13,16 +13,18 @@ import com.ponie.dayov12.MyVpnService;
 
 /** Explicit user-driven AmneziaWG connection card. Opening the dashboard never starts or stops VPN. */
 public final class FoxConnectionCard {
-    private static final int VPN_PERMISSION_REQUEST = 17440;
+    public static final int VPN_PERMISSION_REQUEST = 17440;
     private static final int CONNECTED = 0xff43d17a;
     private final Activity activity;
     private final FoxTheme theme;
+    private final Runnable beforeDisconnect;
     private final TextView status, config, connectButton;
     public final LinearLayout view;
 
-    public FoxConnectionCard(Activity activity, FoxTheme theme) {
+    public FoxConnectionCard(Activity activity, FoxTheme theme, Runnable beforeDisconnect) {
         this.activity = activity;
         this.theme = theme;
+        this.beforeDisconnect = beforeDisconnect;
         view = theme.card();
         theme.add(view, theme.text("AMNEZIAWG", 11, FoxTheme.ACCENT, true), 0);
         theme.add(view, theme.text("Connection", 22, FoxTheme.TEXT, true), 8);
@@ -68,6 +70,7 @@ public final class FoxConnectionCard {
 
     private void toggleConnection() {
         if (MyVpnService.isVpnRunning) {
+            if (beforeDisconnect != null) beforeDisconnect.run();
             activity.stopService(new Intent(activity, MyVpnService.class));
             refresh();
             return;
@@ -84,6 +87,17 @@ public final class FoxConnectionCard {
             }
             return;
         }
+        startVpn(activity);
+    }
+
+    public static boolean result(Activity activity, int request, int result) {
+        if (request != VPN_PERMISSION_REQUEST) return false;
+        if (result == Activity.RESULT_OK) startVpn(activity);
+        else ConfigImportController.toast(activity, "VPN permission was not granted");
+        return true;
+    }
+
+    private static void startVpn(Activity activity) {
         Intent start = new Intent(activity, MyVpnService.class)
             .setAction("com.ponie.dayov12.md.s1");
         try {
