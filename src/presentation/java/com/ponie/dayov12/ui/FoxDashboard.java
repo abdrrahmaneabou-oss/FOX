@@ -25,6 +25,7 @@ public final class FoxDashboard implements Application.ActivityLifecycleCallback
     private final LegacyViews legacy;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private FoxConnectionCard connection;
+    private FreezeAnalogManager freezeAnalog;
     private TextView primary;
     private FoxNavigation navigation;
     private boolean active;
@@ -38,7 +39,7 @@ public final class FoxDashboard implements Application.ActivityLifecycleCallback
             boolean sessionRunning = label.equals("STOP");
             boolean vpnConnected = connection.isConnected();
 
-            // START must never arm the three floating abilities without AmneziaWG.
+            // START must never arm the floating controls without AmneziaWG.
             // If the VPN disappears externally while the session is active, reuse the original
             // STOP listener so the circles are removed by the same code that created them.
             if (!vpnConnected && sessionRunning) {
@@ -46,6 +47,11 @@ public final class FoxDashboard implements Application.ActivityLifecycleCallback
                 label = primary.getText().toString();
                 sessionRunning = label.equals("STOP");
             }
+
+            // The fourth Freeze analog is independent from the original three circles but follows
+            // the same session lifetime: present while the session is running, absent when stopped.
+            freezeAnalog.setEnabled(sessionRunning);
+
             primary.setEnabled(vpnConnected || sessionRunning);
             primary.setAlpha(vpnConnected || sessionRunning ? 1f : 0.62f);
             if (!label.equals(lastAction) || vpnConnected != lastVpnConnected) {
@@ -83,6 +89,7 @@ public final class FoxDashboard implements Application.ActivityLifecycleCallback
             if (child != session && child != hero && child != access) retained.add(child);
         }
 
+        freezeAnalog = FreezeAnalogManager.get(activity);
         connection = new FoxConnectionCard(activity, theme, this::disableSessionBeforeDisconnect);
         LinearLayout sessionCard = theme.card();
         theme.add(sessionCard, theme.text("CONTROL CENTER", 11, FoxTheme.ACCENT, true), 0);
@@ -133,10 +140,11 @@ public final class FoxDashboard implements Application.ActivityLifecycleCallback
         // Existing navigation listeners and every setting/start-stop listener remain attached.
         legacy.pauseDecoration();
         activity.getApplication().registerActivityLifecycleCallbacks(this);
-        android.util.Log.i("FoxUI", "Presentation installed; VPN and session are explicitly user-driven");
+        android.util.Log.i("FoxUI", "Presentation installed; fourth Freeze analog follows session state");
     }
 
     private void disableSessionBeforeDisconnect() {
+        if (freezeAnalog != null) freezeAnalog.setEnabled(false);
         if (primary != null && "STOP".contentEquals(primary.getText())) primary.performClick();
         if (primary != null) paintPrimary(false, false);
     }
@@ -200,6 +208,7 @@ public final class FoxDashboard implements Application.ActivityLifecycleCallback
         if (owner != activity) return;
         active = false;
         handler.removeCallbacksAndMessages(null);
+        if (freezeAnalog != null) freezeAnalog.shutdown();
         activity.getApplication().unregisterActivityLifecycleCallbacks(this);
     }
     @Override public void onActivityCreated(Activity a, Bundle b) {}
