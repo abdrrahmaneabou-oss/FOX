@@ -1,9 +1,19 @@
 #!/usr/bin/env python3
-"""Install the source-built UI while preserving every backend class from the baseline."""
+"""Install the source-built UI/input bridge while preserving every backend class from the baseline."""
 import argparse
 import re
 import shutil
 from pathlib import Path
+
+
+def is_owned_bridge_class(name):
+    return (
+        name.startswith('com/ponie/dayov12/ui/')
+        or name.startswith('com/ponie/dayov12/FoxAwgUi')
+        or name.startswith('rikka/shizuku/')
+        or name.startswith('rikka/sui/')
+        or name.startswith('moe/shizuku/')
+    )
 
 
 def install(decoded, source):
@@ -11,13 +21,15 @@ def install(decoded, source):
     assert (package / 'FoxTransport.smali').exists()
     for path in package.glob('FoxAwgUi*.smali'):
         path.unlink()
+
     for path in source.rglob('*.smali'):
         relative = path.relative_to(source)
         name = relative.as_posix()
-        assert name.startswith('com/ponie/dayov12/ui/') or name.startswith('com/ponie/dayov12/FoxAwgUi'), name
+        assert is_owned_bridge_class(name), name
         target = decoded / 'smali_classes3' / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(path, target)
+
     # Honor V12's existing reduced-motion path, avoiding continuous decorative loops.
     main = decoded / 'smali_classes2/com/ponie/dayov12/MainActivity.smali'
     text = main.read_text()
