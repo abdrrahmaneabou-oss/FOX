@@ -18,7 +18,7 @@ with zipfile.ZipFile(a.baseline) as before, zipfile.ZipFile(a.rebuilt) as rebuil
         name = entry.filename
         if name.upper().startswith("META-INF/") and name.upper().endswith((".RSA", ".DSA", ".EC", ".SF", "MANIFEST.MF")):
             continue
-        data = rebuilt.read(name) if name in ("classes.dex", "classes2.dex") else before.read(name)
+        data = rebuilt.read(name) if name in ("classes.dex", "classes2.dex", "classes3.dex") else before.read(name)
         if name == "AndroidManifest.xml":
             old, new = "com.fox.awg12", "com.fox.onev8"
             assert len(old) == len(new)

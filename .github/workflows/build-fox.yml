@@ -1,10 +1,11 @@
-name: Build FOX AWG startup fix
+name: Build FOX V12 presentation refresh
 
 on:
   push:
     branches: [main]
     paths:
       - 'scripts/**'
+      - 'src/**'
       - '.github/workflows/build-fox.yml'
       - 'FOX_AWG_Experimental.apk'
       - 'FOX_AWG_Private_Project.zip'
@@ -25,7 +26,7 @@ jobs:
           java-version: '17'
       - uses: android-actions/setup-android@v3
         with:
-          packages: 'build-tools;35.0.0'
+          packages: 'build-tools;35.0.0 platforms;android-35'
           log-accepted-android-sdk-licenses: false
       - name: Prepare verified inputs and build tools
         shell: bash
@@ -43,6 +44,7 @@ jobs:
           set -euo pipefail
           java -jar work/tools/apktool.jar d -r FOX_AWG_Experimental.apk -o work/decoded > work/decode.log 2>&1
           python3 scripts/repair_startup.py work/decoded output/startup-patch.json
+          bash scripts/build_presentation.sh
           java -jar work/tools/apktool.jar b work/decoded -o work/rebuilt.apk
           python3 scripts/repack_startup.py FOX_AWG_Experimental.apk work/rebuilt.apk work/unsigned.apk
       - name: Align, sign, and audit final APK
@@ -51,15 +53,15 @@ jobs:
           set -euo pipefail
           fox_build_tools="$ANDROID_HOME/build-tools/35.0.0"
           "$fox_build_tools/zipalign" -P 16 -f 4 work/unsigned.apk work/aligned.apk
-          java -jar "$fox_build_tools/lib/apksigner.jar" sign --ks work/project/signing/private-build-signing.p12 --ks-pass pass:fox-private-build --out output/FOX_AWG_Fixed.apk work/aligned.apk
-          java -jar "$fox_build_tools/lib/apksigner.jar" verify --verbose --print-certs output/FOX_AWG_Fixed.apk
-          "$fox_build_tools/zipalign" -c -P 16 4 output/FOX_AWG_Fixed.apk
-          python3 scripts/audit_startup.py FOX_AWG_Experimental.apk output/FOX_AWG_Fixed.apk output/startup-audit.json
-          sha256sum output/FOX_AWG_Fixed.apk > output/SHA256SUMS
+          java -jar "$fox_build_tools/lib/apksigner.jar" sign --ks work/project/signing/private-build-signing.p12 --ks-pass pass:fox-private-build --out output/FOX_V12_Modern.apk work/aligned.apk
+          java -jar "$fox_build_tools/lib/apksigner.jar" verify --verbose --print-certs output/FOX_V12_Modern.apk
+          "$fox_build_tools/zipalign" -c -P 16 4 output/FOX_V12_Modern.apk
+          python3 scripts/audit_startup.py FOX_AWG_Experimental.apk output/FOX_V12_Modern.apk output/startup-audit.json
+          sha256sum output/FOX_V12_Modern.apk > output/SHA256SUMS
       - name: Upload signed APK and audit
         uses: actions/upload-artifact@v4
         with:
-          name: FOX-AWG-Fixed
+          name: FOX-V12-Modern
           path: output/
           if-no-files-found: error
           retention-days: 30
@@ -80,7 +82,7 @@ jobs:
           java-version: '17'
       - uses: actions/download-artifact@v4
         with:
-          name: FOX-AWG-Fixed
+          name: FOX-V12-Modern
           path: runtime-apk
       - name: Enable KVM
         run: |

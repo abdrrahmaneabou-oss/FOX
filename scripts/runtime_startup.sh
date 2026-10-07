@@ -10,7 +10,7 @@ for fox_kind in original fixed; do
     fox_apk=runtime-original/input/FOX_ORIGINAL.apk
     fox_package=com.fox.onev8
   else
-    fox_apk=runtime-apk/FOX_AWG_Fixed.apk
+    fox_apk=runtime-apk/FOX_V12_Modern.apk
     fox_package=com.fox.onev8
     adb uninstall com.fox.onev8 > runtime-results/remove-original.txt 2>&1 || true
   fi
@@ -38,3 +38,5 @@ grep 'AWG' runtime-results/fixed-ui.xml
 if grep -q -E 'FATAL EXCEPTION|Fatal signal' runtime-results/fixed-logcat.txt; then
   exit 1
 fi
+
+python3 scripts/runtime_presentation.py
