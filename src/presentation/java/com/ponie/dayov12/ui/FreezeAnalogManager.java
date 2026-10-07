@@ -3,11 +3,10 @@ package com.ponie.dayov12.ui;
 import android.content.Context;
 import android.view.MotionEvent;
 
-/** Process-wide owner for the independent Freeze analog feature. */
-final class FreezeAnalogManager implements FreezeAnalogController.SettingsRequestListener {
-    interface TouchRelay {
-        void relay(MotionEvent event);
-    }
+/** Process-wide owner for the Freeze analog and its Shizuku touch backend. */
+final class FreezeAnalogManager implements
+        FreezeAnalogController.SettingsRequestListener,
+        ShizukuInputBridge.Listener {
 
     private static volatile FreezeAnalogManager instance;
 
@@ -26,25 +25,45 @@ final class FreezeAnalogManager implements FreezeAnalogController.SettingsReques
 
     private final Context context;
     private final FreezeAnalogController controller;
+    private final ShizukuInputBridge inputBridge;
     private FreezeAnalogSettingsOverlay settingsOverlay;
     private boolean enabled;
+    private volatile boolean permissionDenied;
 
     private FreezeAnalogManager(Context context) {
         this.context = context;
         this.controller = new FreezeAnalogController(context);
         this.controller.setSettingsRequestListener(this);
+        this.inputBridge = new ShizukuInputBridge(context, this);
+        this.controller.setTouchRelay(this::relayToShizuku);
     }
 
-    synchronized void setTouchRelay(final TouchRelay relay) {
-        if (relay == null) {
-            controller.setTouchRelay(null);
-        } else {
-            controller.setTouchRelay(relay::relay);
+    int connectShizuku() {
+        permissionDenied = false;
+        return inputBridge.ensureReady();
+    }
+
+    int getShizukuState() {
+        if (inputBridge.isReady()) return ShizukuInputBridge.READY;
+        if (permissionDenied) return ShizukuInputBridge.DENIED;
+        return inputBridge.peekState();
+    }
+
+    boolean isShizukuReady() {
+        return inputBridge.isReady();
+    }
+
+    int getShizukuBackendKind() {
+        return inputBridge.getBackendKind();
+    }
+
+    /** Returns true only if the requested state could actually be applied. */
+    synchronized boolean setEnabled(boolean value) {
+        if (enabled == value) return true;
+        if (value && !inputBridge.isReady()) {
+            inputBridge.ensureReady();
+            return false;
         }
-    }
-
-    synchronized void setEnabled(boolean value) {
-        if (enabled == value) return;
         enabled = value;
         if (value) {
             controller.show();
@@ -52,6 +71,7 @@ final class FreezeAnalogManager implements FreezeAnalogController.SettingsReques
             closeSettings(false);
             controller.hide();
         }
+        return true;
     }
 
     synchronized boolean isEnabled() { return enabled; }
@@ -68,6 +88,15 @@ final class FreezeAnalogManager implements FreezeAnalogController.SettingsReques
         settingsOverlay.show();
     }
 
+    @Override public void onInputBridgeReadyChanged(boolean ready) {
+        if (!ready) setEnabled(false);
+    }
+
+    @Override public void onInputBridgePermissionDenied() {
+        permissionDenied = true;
+        setEnabled(false);
+    }
+
     synchronized void closeSettings(boolean save) {
         if (settingsOverlay == null) return;
         settingsOverlay.dismiss(save);
@@ -79,6 +108,31 @@ final class FreezeAnalogManager implements FreezeAnalogController.SettingsReques
         closeSettings(false);
         controller.setTouchRelay(null);
         controller.shutdown();
+        inputBridge.shutdown();
         if (instance == this) instance = null;
+    }
+
+    private void relayToShizuku(MotionEvent event) {
+        if (!enabled || !inputBridge.isReady()) return;
+        int action = event.getActionMasked();
+        if (action != MotionEvent.ACTION_DOWN
+                && action != MotionEvent.ACTION_POINTER_DOWN
+                && action != MotionEvent.ACTION_MOVE
+                && action != MotionEvent.ACTION_UP
+                && action != MotionEvent.ACTION_POINTER_UP
+                && action != MotionEvent.ACTION_CANCEL) {
+            return;
+        }
+
+        int index = action == MotionEvent.ACTION_MOVE ? 0 : event.getActionIndex();
+        if (index < 0 || index >= event.getPointerCount()) index = 0;
+        float rawX = event.getRawX(index);
+        float rawY = event.getRawY(index);
+        inputBridge.sendTouch(
+                action,
+                event.getDownTime(),
+                event.getEventTime(),
+                rawX,
+                rawY);
     }
 }
