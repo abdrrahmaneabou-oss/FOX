@@ -18,6 +18,8 @@ import java.util.List;
 
 /** Presentation-only controller. Original controls and listeners are reused, never reimplemented. */
 public final class FoxDashboard implements Application.ActivityLifecycleCallbacks {
+    private static final int START_ACTIVE = 0xffd84a4a;
+    private static final int START_IDLE = 0xff202431;
     private final Activity activity;
     private final FoxTheme theme;
     private final LegacyViews legacy;
@@ -31,20 +33,36 @@ public final class FoxDashboard implements Application.ActivityLifecycleCallback
             if (!active || activity.isDestroyed()) return;
             connection.refresh();
             navigation.refresh();
-            // Original code updates the labels; only repaint the action's surface when required.
+
             String label = primary.getText().toString();
-            if (!label.equals(lastAction)) {
-                lastAction = label;
-                primary.setBackground(theme.surface(label.equals("STOP") ? 0xff383044 : FoxTheme.ACCENT, 14));
-                primary.setTextColor(label.equals("STOP") ? FoxTheme.TEXT : FoxTheme.BG);
+            boolean sessionRunning = label.equals("STOP");
+            boolean vpnConnected = connection.isConnected();
+
+            // START must never arm the three floating abilities without AmneziaWG.
+            // If the VPN disappears externally while the session is active, reuse the original
+            // STOP listener so the circles are removed by the same code that created them.
+            if (!vpnConnected && sessionRunning) {
+                primary.performClick();
+                label = primary.getText().toString();
+                sessionRunning = label.equals("STOP");
             }
-            handler.postDelayed(this, 1000);
+            primary.setEnabled(vpnConnected || sessionRunning);
+            primary.setAlpha(vpnConnected || sessionRunning ? 1f : 0.62f);
+            if (!label.equals(lastAction) || vpnConnected != lastVpnConnected) {
+                lastAction = label;
+                lastVpnConnected = vpnConnected;
+                paintPrimary(sessionRunning, vpnConnected);
+            }
+            handler.postDelayed(this, 250);
         }
     };
     private String lastAction = "";
+    private boolean lastVpnConnected;
+
     public FoxDashboard(Activity activity) {
         this.activity = activity; theme = new FoxTheme(activity); legacy = new LegacyViews(activity);
     }
+
     public void install() {
         // Resolve every required view before editing the hierarchy. A changed APK fails visibly.
         ScrollView home = legacy.field("viewHome", ScrollView.class);
@@ -64,18 +82,28 @@ public final class FoxDashboard implements Application.ActivityLifecycleCallback
             View child = homeColumn.getChildAt(i);
             if (child != session && child != hero && child != access) retained.add(child);
         }
-        connection = new FoxConnectionCard(activity, theme);
+
+        connection = new FoxConnectionCard(activity, theme, this::disableSessionBeforeDisconnect);
         LinearLayout sessionCard = theme.card();
         theme.add(sessionCard, theme.text("CONTROL CENTER", 11, FoxTheme.ACCENT, true), 0);
         theme.add(sessionCard, theme.text("Your session", 26, FoxTheme.TEXT, true), 10);
-        theme.add(sessionCard, theme.text("Start once. Control with your floating buttons.", 13, FoxTheme.MUTED, false), 10);
-        LegacyViews.detach(badge); badge.setTextSize(12); badge.setPadding(0, theme.dp(10), 0, theme.dp(10));
-        badge.setBackground(null); theme.add(sessionCard, badge, 6);
-        LegacyViews.detach(primary); primary.setMinHeight(theme.dp(54)); primary.setTextSize(16);
+        theme.add(sessionCard, theme.text("Connect AmneziaWG first, then enable the floating abilities.", 13, FoxTheme.MUTED, false), 10);
+        LegacyViews.detach(badge);
+        badge.setTextSize(12);
+        badge.setPadding(0, theme.dp(10), 0, theme.dp(10));
+        badge.setBackground(null);
+        theme.add(sessionCard, badge, 6);
+        LegacyViews.detach(primary);
+        primary.setMinHeight(theme.dp(54));
+        primary.setTextSize(16);
         primary.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
         primary.setPadding(theme.dp(16), theme.dp(16), theme.dp(16), theme.dp(16));
+        primary.setEnabled(connection.isConnected());
+        paintPrimary(primary.getText().toString().equals("STOP"), connection.isConnected());
         theme.add(sessionCard, primary, 6);
-        homeColumn.removeAllViews(); homeColumn.setPadding(theme.dp(18), theme.dp(8), theme.dp(18), theme.dp(24));
+
+        homeColumn.removeAllViews();
+        homeColumn.setPadding(theme.dp(18), theme.dp(8), theme.dp(18), theme.dp(24));
         homeColumn.setBackgroundColor(FoxTheme.BG);
         theme.add(homeColumn, sessionCard, 0);
         theme.add(homeColumn, connection.view, 14);
@@ -83,9 +111,11 @@ public final class FoxDashboard implements Application.ActivityLifecycleCallback
             quietStyle(child);
             theme.add(homeColumn, child, 14);
         }
-        quietStyle(access); theme.add(homeColumn, access, 18);
+        quietStyle(access);
+        theme.add(homeColumn, access, 18);
         home.setOnScrollChangeListener(null); // The old callback only parallax-animates the removed hero.
-        home.setFillViewport(false); home.setVerticalScrollBarEnabled(false);
+        home.setFillViewport(false);
+        home.setVerticalScrollBarEnabled(false);
         root.setBackgroundColor(FoxTheme.BG);
         for (int i=0; i<root.getChildCount(); i++) {
             View child = root.getChildAt(i);
@@ -93,15 +123,30 @@ public final class FoxDashboard implements Application.ActivityLifecycleCallback
         }
         quietStyle(customize);
         compactPreview(customize);
-        homeNav.setText("Home"); customizeNav.setText("Customize");
-        homeNav.setTextSize(13); customizeNav.setTextSize(13);
-        homeNav.setContentDescription("Home"); customizeNav.setContentDescription("Customize");
+        homeNav.setText("Home");
+        customizeNav.setText("Customize");
+        homeNav.setTextSize(13);
+        customizeNav.setTextSize(13);
+        homeNav.setContentDescription("Home");
+        customizeNav.setContentDescription("Customize");
         navigation = new FoxNavigation(activity, theme, legacy);
-        // Existing navigation listeners and every setting listener remain attached.
+        // Existing navigation listeners and every setting/start-stop listener remain attached.
         legacy.pauseDecoration();
         activity.getApplication().registerActivityLifecycleCallbacks(this);
-        android.util.Log.i("FoxUI", "Presentation installed; original controls retained");
+        android.util.Log.i("FoxUI", "Presentation installed; VPN and session are explicitly user-driven");
     }
+
+    private void disableSessionBeforeDisconnect() {
+        if (primary != null && "STOP".contentEquals(primary.getText())) primary.performClick();
+        if (primary != null) paintPrimary(false, false);
+    }
+
+    private void paintPrimary(boolean sessionRunning, boolean vpnConnected) {
+        int color = sessionRunning ? START_ACTIVE : START_IDLE;
+        primary.setBackground(theme.surface(color, 14));
+        primary.setTextColor(sessionRunning ? FoxTheme.TEXT : (vpnConnected ? FoxTheme.TEXT : FoxTheme.MUTED));
+    }
+
     private void compactPreview(View view) {
         if (view.getClass().getName().endsWith("$RexPedestalView")) {
             ViewGroup.LayoutParams lp = view.getLayoutParams();
@@ -112,6 +157,7 @@ public final class FoxDashboard implements Application.ActivityLifecycleCallback
             for (int i=0; i<group.getChildCount(); i++) compactPreview(group.getChildAt(i));
         }
     }
+
     private void quietStyle(View view) {
         String type = view.getClass().getName();
         if (type.endsWith("$RexMotionBackgroundView") || type.endsWith("$RexEnergyRailView")
@@ -139,9 +185,12 @@ public final class FoxDashboard implements Application.ActivityLifecycleCallback
             for (int i=0; i<group.getChildCount(); i++) quietStyle(group.getChildAt(i));
         }
     }
+
     @Override public void onActivityResumed(Activity owner) {
         if (owner != activity) return;
-        active = true; handler.removeCallbacks(refresh); handler.post(refresh);
+        active = true;
+        handler.removeCallbacks(refresh);
+        handler.post(refresh);
         legacy.pauseDecoration();
     }
     @Override public void onActivityPaused(Activity owner) {
@@ -149,7 +198,8 @@ public final class FoxDashboard implements Application.ActivityLifecycleCallback
     }
     @Override public void onActivityDestroyed(Activity owner) {
         if (owner != activity) return;
-        active = false; handler.removeCallbacksAndMessages(null);
+        active = false;
+        handler.removeCallbacksAndMessages(null);
         activity.getApplication().unregisterActivityLifecycleCallbacks(this);
     }
     @Override public void onActivityCreated(Activity a, Bundle b) {}
