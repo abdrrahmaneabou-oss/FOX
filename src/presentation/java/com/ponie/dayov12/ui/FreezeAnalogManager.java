@@ -1,14 +1,11 @@
 package com.ponie.dayov12.ui;
 
 import android.content.Context;
-import android.view.MotionEvent;
 
-/** Process-wide owner for the independent Freeze analog feature. */
-final class FreezeAnalogManager implements FreezeAnalogController.SettingsRequestListener {
-    interface TouchRelay {
-        void relay(MotionEvent event);
-    }
-
+/** Process-wide owner for the independent hold-to-Freeze analog feature. */
+final class FreezeAnalogManager implements
+        FreezeAnalogController.SettingsRequestListener,
+        ShizukuInputBridge.Listener {
     private static volatile FreezeAnalogManager instance;
 
     static FreezeAnalogManager get(Context context) {
@@ -25,44 +22,67 @@ final class FreezeAnalogManager implements FreezeAnalogController.SettingsReques
     }
 
     private final Context context;
+    private final ShizukuInputBridge inputBridge;
     private final FreezeAnalogController controller;
     private FreezeAnalogSettingsOverlay settingsOverlay;
-    private boolean enabled;
+    private boolean requestedEnabled;
+    private boolean active;
 
     private FreezeAnalogManager(Context context) {
         this.context = context;
-        this.controller = new FreezeAnalogController(context);
+        this.inputBridge = new ShizukuInputBridge(context, this);
+        this.controller = new FreezeAnalogController(context, inputBridge);
         this.controller.setSettingsRequestListener(this);
     }
 
-    synchronized void setTouchRelay(final TouchRelay relay) {
-        if (relay == null) {
-            controller.setTouchRelay(null);
+    /** Called only by the explicit dashboard card. */
+    synchronized void setEnabled(boolean value) {
+        requestedEnabled = value;
+        if (!value) {
+            closeSettings(false);
+            controller.hide();
+            active = false;
+            return;
+        }
+
+        int state = inputBridge.ensureReady();
+        if (state == ShizukuInputBridge.READY) {
+            active = controller.show();
         } else {
-            controller.setTouchRelay(relay::relay);
+            active = false;
+            controller.hide();
+            if (state == ShizukuInputBridge.DENIED) requestedEnabled = false;
         }
     }
 
-    synchronized void setEnabled(boolean value) {
-        if (enabled == value) return;
-        enabled = value;
-        if (value) {
-            controller.show();
+    /** True includes the short period while Shizuku permission/service binding completes. */
+    synchronized boolean isEnabled() { return requestedEnabled; }
+    synchronized boolean isActive() { return active && controller.isShown() && inputBridge.isReady(); }
+    synchronized boolean isWaitingForInput() { return requestedEnabled && !isActive(); }
+
+    @Override public synchronized void onInputBridgeReadyChanged(boolean ready) {
+        if (!requestedEnabled) {
+            if (!ready) active = false;
+            return;
+        }
+        if (ready) {
+            active = controller.show();
         } else {
             closeSettings(false);
             controller.hide();
+            active = false;
         }
     }
 
-    synchronized boolean isEnabled() { return enabled; }
-
-    boolean onGlobalPointer(int action, int pointerId, float rawX, float rawY, long eventTime) {
-        if (!enabled) return false;
-        return controller.onPointer(action, pointerId, rawX, rawY, eventTime);
+    @Override public synchronized void onInputBridgePermissionDenied() {
+        requestedEnabled = false;
+        active = false;
+        closeSettings(false);
+        controller.hide();
     }
 
     @Override public synchronized void onFreezeAnalogSettingsRequested(FreezeAnalogController owner) {
-        if (!enabled) return;
+        if (!isActive()) return;
         if (settingsOverlay != null && settingsOverlay.isShown()) return;
         settingsOverlay = new FreezeAnalogSettingsOverlay(context, controller);
         settingsOverlay.show();
@@ -75,10 +95,11 @@ final class FreezeAnalogManager implements FreezeAnalogController.SettingsReques
     }
 
     synchronized void shutdown() {
-        enabled = false;
+        requestedEnabled = false;
+        active = false;
         closeSettings(false);
-        controller.setTouchRelay(null);
         controller.shutdown();
+        inputBridge.shutdown();
         if (instance == this) instance = null;
     }
 }
