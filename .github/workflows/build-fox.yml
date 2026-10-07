@@ -43,6 +43,7 @@ jobs:
         run: |
           set -euo pipefail
           java -jar work/tools/apktool.jar d -r FOX_AWG_Experimental.apk -o work/decoded > work/decode.log 2>&1
+          python3 scripts/inspect_freeze.py work/decoded > output/freeze-inspection.txt
           python3 scripts/repair_startup.py work/decoded output/startup-patch.json
           bash scripts/build_presentation.sh
           java -jar work/tools/apktool.jar b work/decoded -o work/rebuilt.apk
