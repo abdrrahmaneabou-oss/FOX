@@ -3,6 +3,7 @@
 import argparse
 import copy
 import os
+import re
 import subprocess
 import zipfile
 from pathlib import Path
@@ -18,20 +19,56 @@ original = Path("work/project/input/FOX_ORIGINAL.apk")
 with zipfile.ZipFile(original) as legacy, zipfile.ZipFile(original, metadata_encoding="utf-8") as correct:
     restored_names = {old.filename: new.filename for old, new in zip(legacy.infolist(), correct.infolist()) if old.filename != new.filename}
 
+
+def apktool_sdk_levels(path: Path):
+    """Read the SDK values apktool extracted from the original binary manifest.
+
+    Apktool intentionally stores <uses-sdk> in apktool.yml instead of keeping it
+    in the decoded text manifest. Because FOX compiles only the merged manifest
+    with aapt2, these values must be passed back explicitly or the final APK is
+    treated as targeting an ancient SDK and Android 16 rejects installation.
+    """
+    text = path.read_text(encoding="utf-8")
+    values = {}
+    in_sdk = False
+    sdk_indent = None
+    for line in text.splitlines():
+        stripped = line.strip()
+        indent = len(line) - len(line.lstrip())
+        if stripped == "sdkInfo:":
+            in_sdk = True
+            sdk_indent = indent
+            continue
+        if in_sdk and stripped and indent <= sdk_indent:
+            break
+        if in_sdk:
+            match = re.match(r"(minSdkVersion|targetSdkVersion):\s*['\"]?([0-9]+)['\"]?\s*$", stripped)
+            if match:
+                values[match.group(1)] = match.group(2)
+    if "minSdkVersion" not in values or "targetSdkVersion" not in values:
+        raise RuntimeError(f"Could not recover min/target SDK from {path}: {values}")
+    return values["minSdkVersion"], values["targetSdkVersion"]
+
+
 manifest_apk = a.manifest_apk
 if manifest_apk is None:
     android_home = Path(os.environ["ANDROID_HOME"])
     build_tools = android_home / "build-tools/35.0.0"
     android_jar = android_home / "platforms/android-35/android.jar"
     manifest_apk = Path("work/manifest-only.apk")
+    min_sdk, target_sdk = apktool_sdk_levels(Path("work/manifest-decoded/apktool.yml"))
+    print(f"Compiling FOX manifest with minSdk={min_sdk}, targetSdk={target_sdk}")
 
     # Compile only the merged manifest. Use FOX itself as an include so aapt2 can
     # resolve the app's existing @mipmap/@style/etc references against the original
-    # compiled resources table. This avoids rebuilding any FOX resource files.
+    # compiled resources table. Explicitly restore the SDK levels apktool moved to
+    # apktool.yml; otherwise aapt2 emits no <uses-sdk> and Android 16 refuses it.
     subprocess.run([
         str(build_tools / "aapt2"), "link",
         "-I", str(android_jar),
         "-I", str(a.baseline),
+        "--min-sdk-version", min_sdk,
+        "--target-sdk-version", target_sdk,
         "--manifest", "work/decoded/AndroidManifest.xml",
         "-o", str(manifest_apk),
     ], check=True)
