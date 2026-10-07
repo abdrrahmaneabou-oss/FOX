@@ -25,6 +25,8 @@ def presentation(key):
         "Lcom/ponie/dayov12/FoxAwgUi",
         "Lcom/ponie/dayov12/ui/",
         "Lrikka/shizuku/",
+        "Lrikka/sui/",
+        "Lmoe/shizuku/api/",
     ))
 
 
