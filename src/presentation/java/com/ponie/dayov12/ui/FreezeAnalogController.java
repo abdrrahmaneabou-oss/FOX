@@ -12,14 +12,16 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
 
-/** Runtime state machine and visual layer for the independent hold-to-Freeze analog. */
+/**
+ * Runtime state machine and visual layer for the independent hold-to-Freeze analog.
+ *
+ * Normal mode is deliberately FLAG_NOT_TOUCHABLE. A privileged/global input source
+ * feeds pointer coordinates through {@link #onPointer}; the original physical touch
+ * therefore keeps its normal Android target underneath this visual overlay.
+ */
 final class FreezeAnalogController {
     interface SettingsRequestListener {
         void onFreezeAnalogSettingsRequested(FreezeAnalogController controller);
-    }
-
-    interface TouchRelay {
-        void relay(MotionEvent event);
     }
 
     private static final long TRIPLE_TAP_WINDOW_MS = 650L;
@@ -36,7 +38,6 @@ final class FreezeAnalogController {
 
     private WindowManager.LayoutParams params;
     private SettingsRequestListener settingsListener;
-    private TouchRelay touchRelay;
     private boolean shown;
     private boolean tracking;
     private boolean positionEdit;
@@ -55,16 +56,12 @@ final class FreezeAnalogController {
         this.density = this.context.getResources().getDisplayMetrics().density;
         this.tapSlopPx = 12f * density;
         this.view = new AnalogView(this.context);
-        this.view.setOnTouchListener(new AnalogTouchListener());
+        this.view.setOnTouchListener(new PositionEditTouchListener());
         rebuildParams();
     }
 
     void setSettingsRequestListener(SettingsRequestListener listener) {
         this.settingsListener = listener;
-    }
-
-    void setTouchRelay(TouchRelay relay) {
-        this.touchRelay = relay;
     }
 
     synchronized void show() {
@@ -88,8 +85,15 @@ final class FreezeAnalogController {
         shown = false;
     }
 
-    synchronized boolean isShown() { return shown; }
+    synchronized boolean isShown() {
+        return shown;
+    }
 
+    /**
+     * Feed a global pointer event in raw screen coordinates. The visual overlay itself
+     * does not consume Android touch events, so the same physical gesture reaches the
+     * window below it naturally.
+     */
     synchronized boolean onPointer(int action, int id, float rawX, float rawY, long eventTime) {
         if (!shown || positionEdit) return false;
         switch (action) {
@@ -131,6 +135,7 @@ final class FreezeAnalogController {
         }
     }
 
+    /** Temporarily makes only the analog circle touchable so its base can be dragged. */
     synchronized void setPositionEdit(boolean enabled) {
         if (positionEdit == enabled) return;
         cancelHold();
@@ -181,7 +186,6 @@ final class FreezeAnalogController {
     synchronized void shutdown() {
         hide();
         settingsListener = null;
-        touchRelay = null;
         mainHandler.removeCallbacksAndMessages(null);
     }
 
@@ -197,7 +201,8 @@ final class FreezeAnalogController {
         float knobRadius = px(settings.knobDp) / 2f;
         float centerX = settings.x + baseRadius;
         float centerY = settings.y + baseRadius;
-        FreezeAnalogGeometry.clamp(rawX - centerX, rawY - centerY, baseRadius, knobRadius, view.offset);
+        float[] offset = view.offset;
+        FreezeAnalogGeometry.clamp(rawX - centerX, rawY - centerY, baseRadius, knobRadius, offset);
         view.postInvalidate();
     }
 
@@ -237,12 +242,17 @@ final class FreezeAnalogController {
 
     private void rebuildParams() {
         int diameter = Math.max(1, Math.round(px(settings.baseDp)));
+        int screenW = context.getResources().getDisplayMetrics().widthPixels;
+        int screenH = context.getResources().getDisplayMetrics().heightPixels;
+        settings.x = clamp(settings.x, 0, Math.max(0, screenW - diameter));
+        settings.y = clamp(settings.y, 0, Math.max(0, screenH - diameter));
+
         int type = Build.VERSION.SDK_INT >= 26
                 ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
                 : WindowManager.LayoutParams.TYPE_PHONE;
         int flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-                | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
                 | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS;
+        if (!positionEdit) flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
         WindowManager.LayoutParams next = new WindowManager.LayoutParams(
                 diameter, diameter, type, flags, android.graphics.PixelFormat.TRANSLUCENT);
         next.gravity = Gravity.TOP | Gravity.START;
@@ -269,66 +279,33 @@ final class FreezeAnalogController {
         return Math.max(min, Math.min(max, value));
     }
 
-    private final class AnalogTouchListener implements View.OnTouchListener {
-        private float editStartRawX;
-        private float editStartRawY;
-        private int editStartBaseX;
-        private int editStartBaseY;
+    private final class PositionEditTouchListener implements View.OnTouchListener {
+        private float startRawX;
+        private float startRawY;
+        private int startBaseX;
+        private int startBaseY;
 
         @Override public boolean onTouch(View ignored, MotionEvent event) {
-            if (positionEdit) {
-                switch (event.getActionMasked()) {
-                    case MotionEvent.ACTION_DOWN:
-                        editStartRawX = event.getRawX();
-                        editStartRawY = event.getRawY();
-                        editStartBaseX = settings.x;
-                        editStartBaseY = settings.y;
-                        return true;
-                    case MotionEvent.ACTION_MOVE:
-                        setBasePosition(
-                                editStartBaseX + Math.round(event.getRawX() - editStartRawX),
-                                editStartBaseY + Math.round(event.getRawY() - editStartRawY),
-                                false);
-                        return true;
-                    case MotionEvent.ACTION_UP:
-                    case MotionEvent.ACTION_CANCEL:
-                        return true;
-                    default:
-                        return true;
-                }
+            if (!positionEdit) return false;
+            switch (event.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    startRawX = event.getRawX();
+                    startRawY = event.getRawY();
+                    startBaseX = settings.x;
+                    startBaseY = settings.y;
+                    return true;
+                case MotionEvent.ACTION_MOVE:
+                    setBasePosition(
+                            startBaseX + Math.round(event.getRawX() - startRawX),
+                            startBaseY + Math.round(event.getRawY() - startRawY),
+                            false);
+                    return true;
+                case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_CANCEL:
+                    return true;
+                default:
+                    return true;
             }
-
-            final int action = event.getActionMasked();
-            final int actionIndex = event.getActionIndex();
-            final int id;
-            final float rawX;
-            final float rawY;
-
-            if (action == MotionEvent.ACTION_MOVE && tracking) {
-                int index = event.findPointerIndex(pointerId);
-                if (index < 0) return true;
-                id = pointerId;
-                rawX = event.getRawX(index);
-                rawY = event.getRawY(index);
-            } else {
-                id = event.getPointerId(actionIndex);
-                rawX = event.getRawX(actionIndex);
-                rawY = event.getRawY(actionIndex);
-            }
-
-            boolean handled = onPointer(action, id, rawX, rawY, event.getEventTime());
-
-            TouchRelay relay = touchRelay;
-            if (relay != null) {
-                MotionEvent copy = MotionEvent.obtain(event);
-                try { relay.relay(copy); }
-                catch (RuntimeException relayError) {
-                    android.util.Log.w("FreezeAnalog", "Touch relay rejected event", relayError);
-                } finally {
-                    copy.recycle();
-                }
-            }
-            return handled || tracking;
         }
     }
 
