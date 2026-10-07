@@ -1,14 +1,9 @@
 package com.ponie.dayov12.ui;
 
 import android.content.Context;
+import android.view.MotionEvent;
 
-/**
- * Process-wide owner for the independent Freeze analog feature.
- *
- * The dashboard card is intentionally not wired yet. The eventual input bridge only
- * needs to call {@link #onGlobalPointer}; all Freeze/geometry/settings behavior stays
- * behind this small boundary.
- */
+/** Process-wide owner for the independent fourth Freeze analog control. */
 final class FreezeAnalogManager implements FreezeAnalogController.SettingsRequestListener {
     private static volatile FreezeAnalogManager instance;
 
@@ -27,6 +22,7 @@ final class FreezeAnalogManager implements FreezeAnalogController.SettingsReques
 
     private final Context context;
     private final FreezeAnalogController controller;
+    private final FreezeInputBridge inputBridge;
     private FreezeAnalogSettingsOverlay settingsOverlay;
     private boolean enabled;
 
@@ -34,28 +30,61 @@ final class FreezeAnalogManager implements FreezeAnalogController.SettingsReques
         this.context = context;
         this.controller = new FreezeAnalogController(context);
         this.controller.setSettingsRequestListener(this);
+        this.inputBridge = new FreezeInputBridge(context, this);
     }
 
+    /** Follows the same session lifetime as the existing three floating controls. */
     synchronized void setEnabled(boolean value) {
         if (enabled == value) return;
         enabled = value;
         if (value) {
-            controller.show();
+            inputBridge.start();
+            if (inputBridge.isReady()) controller.show();
         } else {
             closeSettings(false);
             controller.hide();
+            inputBridge.stop();
         }
     }
 
     synchronized boolean isEnabled() { return enabled; }
 
-    boolean onGlobalPointer(int action, int pointerId, float rawX, float rawY, long eventTime) {
-        if (!enabled) return false;
-        return controller.onPointer(action, pointerId, rawX, rawY, eventTime);
+    /** Called by the Shizuku bridge only after the system monitor is actually ready. */
+    synchronized void onInputBridgeReady(boolean ready) {
+        if (!enabled || !ready) {
+            closeSettings(false);
+            controller.hide();
+            return;
+        }
+        controller.show();
+    }
+
+    /**
+     * Dispatch one copied system MotionEvent without intercepting the original event.
+     * MOVE/CANCEL can contain several pointers, so each active pointer is offered to
+     * the controller while DOWN/UP uses only the action pointer.
+     */
+    void onGlobalMotion(int action, int actionIndex, int[] ids, float[] xs, float[] ys, long eventTime) {
+        if (!enabled || ids == null || xs == null || ys == null) return;
+        int count = Math.min(ids.length, Math.min(xs.length, ys.length));
+        if (count <= 0) return;
+
+        if (action == MotionEvent.ACTION_MOVE || action == MotionEvent.ACTION_CANCEL) {
+            for (int i = 0; i < count; i++) {
+                controller.onPointer(action, ids[i], xs[i], ys[i], eventTime);
+            }
+            return;
+        }
+
+        if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN
+                || action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_POINTER_UP) {
+            int index = Math.max(0, Math.min(actionIndex, count - 1));
+            controller.onPointer(action, ids[index], xs[index], ys[index], eventTime);
+        }
     }
 
     @Override public synchronized void onFreezeAnalogSettingsRequested(FreezeAnalogController owner) {
-        if (!enabled) return;
+        if (!enabled || !inputBridge.isReady()) return;
         if (settingsOverlay != null && settingsOverlay.isShown()) return;
         settingsOverlay = new FreezeAnalogSettingsOverlay(context, controller);
         settingsOverlay.show();
@@ -71,6 +100,7 @@ final class FreezeAnalogManager implements FreezeAnalogController.SettingsReques
         enabled = false;
         closeSettings(false);
         controller.shutdown();
+        inputBridge.shutdown();
         if (instance == this) instance = null;
     }
 }
