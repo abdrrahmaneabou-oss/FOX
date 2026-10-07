@@ -26,7 +26,7 @@ final class FreezeInputBridge {
     private IBinder remote;
 
     private final Binder callback = new Binder() {
-        @Override protected boolean onTransact(int code, Parcel data, Parcel reply, int flags) {
+        @Override protected boolean onTransact(int code, Parcel data, Parcel reply, int flags) throws RemoteException {
             if (code == FreezeInputUserService.CALLBACK_STATUS) {
                 boolean next = data.readInt() != 0;
                 synchronized (FreezeInputBridge.this) {
