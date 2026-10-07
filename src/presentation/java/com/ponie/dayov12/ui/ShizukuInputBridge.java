@@ -9,6 +9,7 @@ import android.os.Parcel;
 import android.os.RemoteException;
 import rikka.shizuku.Shizuku;
 
+/** App-process side of the Shizuku input engine. */
 final class ShizukuInputBridge {
     interface Listener {
         void onInputBridgeReadyChanged(boolean ready);
@@ -26,15 +27,26 @@ final class ShizukuInputBridge {
     private volatile IBinder remote;
     private volatile boolean binding;
     private volatile boolean permissionRequested;
+    private volatile int backendKind;
 
     private final ServiceConnection connection = new ServiceConnection() {
         @Override public void onServiceConnected(ComponentName name, IBinder binder) {
             binding = false;
-            remote = binder != null && binder.pingBinder() ? binder : null;
-            notifyReady(remote != null);
+            int capability = probe(binder);
+            if (capability > 0) {
+                backendKind = capability;
+                remote = binder;
+                notifyReady(true);
+            } else {
+                backendKind = 0;
+                remote = null;
+                notifyReady(false);
+            }
         }
+
         @Override public void onServiceDisconnected(ComponentName name) {
             binding = false;
+            backendKind = 0;
             remote = null;
             notifyReady(false);
         }
@@ -43,6 +55,7 @@ final class ShizukuInputBridge {
     private final Shizuku.OnBinderReceivedListener binderListener = this::onBinderReceived;
     private final Shizuku.OnBinderDeadListener deadListener = () -> {
         binding = false;
+        backendKind = 0;
         remote = null;
         notifyReady(false);
     };
@@ -61,7 +74,7 @@ final class ShizukuInputBridge {
                 .daemon(false)
                 .processNameSuffix("freeze_input")
                 .debuggable(false)
-                .version(1);
+                .version(2);
         Shizuku.addBinderReceivedListenerSticky(binderListener);
         Shizuku.addBinderDeadListener(deadListener);
         Shizuku.addRequestPermissionResultListener(permissionListener);
@@ -69,9 +82,28 @@ final class ShizukuInputBridge {
 
     boolean isReady() {
         IBinder b = remote;
-        return b != null && b.pingBinder();
+        return b != null && b.pingBinder() && backendKind > 0;
     }
 
+    int getBackendKind() {
+        return isReady() ? backendKind : 0;
+    }
+
+    /** Side-effect-free state check used by the dashboard refresh loop. */
+    int peekState() {
+        if (isReady()) return READY;
+        try {
+            if (!Shizuku.pingBinder()) return UNAVAILABLE;
+            if (Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED) {
+                return WAITING;
+            }
+            return Shizuku.shouldShowRequestPermissionRationale() ? DENIED : WAITING;
+        } catch (Throwable error) {
+            return UNAVAILABLE;
+        }
+    }
+
+    /** Starts permission/binding work after an explicit user action. */
     int ensureReady() {
         if (isReady()) return READY;
         try {
@@ -87,14 +119,14 @@ final class ShizukuInputBridge {
             }
             return WAITING;
         } catch (Throwable error) {
-            android.util.Log.e("FreezeAnalogInput", "Shizuku setup failed", error);
+            android.util.Log.e("FoxShizukuInput", "Shizuku setup failed", error);
             return UNAVAILABLE;
         }
     }
 
     boolean sendTouch(int action, long downTime, long eventTime, float x, float y) {
         IBinder b = remote;
-        if (b == null || !b.pingBinder()) return false;
+        if (b == null || !b.pingBinder() || backendKind <= 0) return false;
         Parcel data = Parcel.obtain();
         try {
             data.writeInterfaceToken(PrivilegedInputService.DESCRIPTOR);
@@ -103,11 +135,15 @@ final class ShizukuInputBridge {
             data.writeLong(eventTime);
             data.writeFloat(x);
             data.writeFloat(y);
-            return b.transact(PrivilegedInputService.TRANSACTION_TOUCH, data, null, IBinder.FLAG_ONEWAY);
-        } catch (RemoteException e) {
-            remote = null;
-            binding = false;
-            notifyReady(false);
+            boolean accepted = b.transact(
+                    PrivilegedInputService.TRANSACTION_TOUCH,
+                    data,
+                    null,
+                    IBinder.FLAG_ONEWAY);
+            if (!accepted) invalidate();
+            return accepted;
+        } catch (RemoteException error) {
+            invalidate();
             return false;
         } finally {
             data.recycle();
@@ -119,8 +155,7 @@ final class ShizukuInputBridge {
         try { Shizuku.removeBinderReceivedListener(binderListener); } catch (Throwable ignored) {}
         try { Shizuku.removeBinderDeadListener(deadListener); } catch (Throwable ignored) {}
         try { Shizuku.removeRequestPermissionResultListener(permissionListener); } catch (Throwable ignored) {}
-        remote = null;
-        binding = false;
+        invalidate();
     }
 
     private void onBinderReceived() {
@@ -138,9 +173,38 @@ final class ShizukuInputBridge {
             Shizuku.bindUserService(args, connection);
         } catch (Throwable error) {
             binding = false;
-            remote = null;
-            notifyReady(false);
+            invalidate();
         }
+    }
+
+    private int probe(IBinder binder) {
+        if (binder == null || !binder.pingBinder()) return 0;
+        Parcel data = Parcel.obtain();
+        Parcel reply = Parcel.obtain();
+        try {
+            data.writeInterfaceToken(PrivilegedInputService.DESCRIPTOR);
+            boolean handled = binder.transact(
+                    PrivilegedInputService.TRANSACTION_PROBE,
+                    data,
+                    reply,
+                    0);
+            if (!handled) return 0;
+            reply.readException();
+            return reply.readInt();
+        } catch (Throwable error) {
+            android.util.Log.e("FoxShizukuInput", "UserService capability probe failed", error);
+            return 0;
+        } finally {
+            reply.recycle();
+            data.recycle();
+        }
+    }
+
+    private void invalidate() {
+        binding = false;
+        backendKind = 0;
+        remote = null;
+        notifyReady(false);
     }
 
     private void notifyReady(boolean ready) {
