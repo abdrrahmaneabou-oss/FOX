@@ -1,11 +1,26 @@
 #!/usr/bin/env bash
-# Build presentation only. Backend classes are compile-only stubs, never packaged.
+# Build presentation and the user-authorized Shizuku input bridge. Backend classes remain compile-only stubs.
 set -euo pipefail
 fox_android_jar="$ANDROID_HOME/platforms/android-35/android.jar"
 fox_tools="$ANDROID_HOME/build-tools/35.0.0"
-mkdir -p work/presentation/classes work/presentation/dex
+shizuku_version="13.1.5"
+shizuku_base="https://repo1.maven.org/maven2/dev/rikka/shizuku"
+
+mkdir -p work/presentation/classes work/presentation/dex work/presentation/deps/api work/presentation/deps/provider
+
+curl --fail --location --retry 3 \
+  --output work/presentation/deps/api.aar \
+  "$shizuku_base/api/$shizuku_version/api-$shizuku_version.aar"
+curl --fail --location --retry 3 \
+  --output work/presentation/deps/provider.aar \
+  "$shizuku_base/provider/$shizuku_version/provider-$shizuku_version.aar"
+unzip -qo work/presentation/deps/api.aar classes.jar -d work/presentation/deps/api
+unzip -qo work/presentation/deps/provider.aar classes.jar -d work/presentation/deps/provider
+
+fox_cp="$fox_android_jar:work/presentation/deps/api/classes.jar:work/presentation/deps/provider/classes.jar"
 find src/presentation/java src/presentation/stubs -name '*.java' -print > work/presentation/sources.txt
-javac --release 8 -cp "$fox_android_jar" -d work/presentation/classes @work/presentation/sources.txt
+javac --release 8 -cp "$fox_cp" -d work/presentation/classes @work/presentation/sources.txt
+
 python3 - <<'PY'
 from pathlib import Path
 import zipfile
@@ -16,9 +31,17 @@ with zipfile.ZipFile('work/presentation/ui.jar','w') as z:
         if rel.startswith('com/ponie/dayov12/ui/') or rel.startswith('com/ponie/dayov12/FoxAwgUi'):
             z.write(p,rel)
 PY
-java -cp "$fox_tools/lib/d8.jar" com.android.tools.r8.D8 --release --min-api 29 --lib "$fox_android_jar" --output work/presentation/dex work/presentation/ui.jar
+
+# D8 receives the app bridge plus the exact Shizuku API/provider implementation that
+# the injected manifest provider needs at runtime.
+java -cp "$fox_tools/lib/d8.jar" com.android.tools.r8.D8 \
+  --release --min-api 29 --lib "$fox_android_jar" \
+  --output work/presentation/dex \
+  work/presentation/ui.jar \
+  work/presentation/deps/api/classes.jar \
+  work/presentation/deps/provider/classes.jar
+
 python3 - <<'PY'
-from pathlib import Path
 import zipfile
 with zipfile.ZipFile('FOX_AWG_Experimental.apk') as base, zipfile.ZipFile('work/presentation/ui.apk','w') as z:
     z.writestr('AndroidManifest.xml',base.read('AndroidManifest.xml'))
