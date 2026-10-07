@@ -20,14 +20,20 @@ import java.util.List;
 public final class FoxDashboard implements Application.ActivityLifecycleCallbacks {
     private static final int START_ACTIVE = 0xffd84a4a;
     private static final int START_IDLE = 0xff202431;
+    private static final int ANALOG_ACTIVE = 0xff2f9d63;
+    private static final int ANALOG_IDLE = 0xff202431;
+
     private final Activity activity;
     private final FoxTheme theme;
     private final LegacyViews legacy;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private FoxConnectionCard connection;
     private TextView primary;
+    private TextView analogToggle;
     private FoxNavigation navigation;
+    private FreezeAnalogManager analogManager;
     private boolean active;
+
     private final Runnable refresh = new Runnable() {
         @Override public void run() {
             if (!active || activity.isDestroyed()) return;
@@ -38,9 +44,6 @@ public final class FoxDashboard implements Application.ActivityLifecycleCallback
             boolean sessionRunning = label.equals("STOP");
             boolean vpnConnected = connection.isConnected();
 
-            // START must never arm the three floating abilities without AmneziaWG.
-            // If the VPN disappears externally while the session is active, reuse the original
-            // STOP listener so the circles are removed by the same code that created them.
             if (!vpnConnected && sessionRunning) {
                 primary.performClick();
                 label = primary.getText().toString();
@@ -53,6 +56,7 @@ public final class FoxDashboard implements Application.ActivityLifecycleCallback
                 lastVpnConnected = vpnConnected;
                 paintPrimary(sessionRunning, vpnConnected);
             }
+            paintAnalog(analogManager != null && analogManager.isEnabled());
             handler.postDelayed(this, 250);
         }
     };
@@ -60,11 +64,12 @@ public final class FoxDashboard implements Application.ActivityLifecycleCallback
     private boolean lastVpnConnected;
 
     public FoxDashboard(Activity activity) {
-        this.activity = activity; theme = new FoxTheme(activity); legacy = new LegacyViews(activity);
+        this.activity = activity;
+        theme = new FoxTheme(activity);
+        legacy = new LegacyViews(activity);
     }
 
     public void install() {
-        // Resolve every required view before editing the hierarchy. A changed APK fails visibly.
         ScrollView home = legacy.field("viewHome", ScrollView.class);
         ScrollView customize = legacy.field("viewImpair", ScrollView.class);
         RelativeLayout root = legacy.field("rexRootLayout", RelativeLayout.class);
@@ -78,12 +83,14 @@ public final class FoxDashboard implements Application.ActivityLifecycleCallback
         View access = LegacyViews.topChild(homeColumn, permission);
         View hero = LegacyViews.topChild(homeColumn, legacy.field("tvHeroStatus", TextView.class));
         List<View> retained = new ArrayList<>();
-        for (int i=0; i<homeColumn.getChildCount(); i++) {
+        for (int i = 0; i < homeColumn.getChildCount(); i++) {
             View child = homeColumn.getChildAt(i);
             if (child != session && child != hero && child != access) retained.add(child);
         }
 
         connection = new FoxConnectionCard(activity, theme, this::disableSessionBeforeDisconnect);
+        analogManager = FreezeAnalogManager.get(activity);
+
         LinearLayout sessionCard = theme.card();
         theme.add(sessionCard, theme.text("CONTROL CENTER", 11, FoxTheme.ACCENT, true), 0);
         theme.add(sessionCard, theme.text("Your session", 26, FoxTheme.TEXT, true), 10);
@@ -102,22 +109,36 @@ public final class FoxDashboard implements Application.ActivityLifecycleCallback
         paintPrimary(primary.getText().toString().equals("STOP"), connection.isConnected());
         theme.add(sessionCard, primary, 6);
 
+        LinearLayout analogCard = theme.card();
+        theme.add(analogCard, theme.text("SYSTEM TEST", 11, FoxTheme.ACCENT, true), 0);
+        theme.add(analogCard, theme.text("Freeze analog", 22, FoxTheme.TEXT, true), 9);
+        theme.add(analogCard, theme.text("Independent hold-to-Freeze analog. Triple-tap the analog to open its hidden controls.", 13, FoxTheme.MUTED, false), 8);
+        analogToggle = theme.button("ENABLE ANALOG", false);
+        analogToggle.setOnClickListener(v -> {
+            boolean next = !analogManager.isEnabled();
+            analogManager.setEnabled(next);
+            paintAnalog(next);
+        });
+        theme.add(analogCard, analogToggle, 12);
+        paintAnalog(analogManager.isEnabled());
+
         homeColumn.removeAllViews();
         homeColumn.setPadding(theme.dp(18), theme.dp(8), theme.dp(18), theme.dp(24));
         homeColumn.setBackgroundColor(FoxTheme.BG);
         theme.add(homeColumn, sessionCard, 0);
         theme.add(homeColumn, connection.view, 14);
+        theme.add(homeColumn, analogCard, 14);
         for (View child : retained) {
             quietStyle(child);
             theme.add(homeColumn, child, 14);
         }
         quietStyle(access);
         theme.add(homeColumn, access, 18);
-        home.setOnScrollChangeListener(null); // The old callback only parallax-animates the removed hero.
+        home.setOnScrollChangeListener(null);
         home.setFillViewport(false);
         home.setVerticalScrollBarEnabled(false);
         root.setBackgroundColor(FoxTheme.BG);
-        for (int i=0; i<root.getChildCount(); i++) {
+        for (int i = 0; i < root.getChildCount(); i++) {
             View child = root.getChildAt(i);
             if (!(child instanceof android.widget.FrameLayout)) quietStyle(child);
         }
@@ -130,10 +151,9 @@ public final class FoxDashboard implements Application.ActivityLifecycleCallback
         homeNav.setContentDescription("Home");
         customizeNav.setContentDescription("Customize");
         navigation = new FoxNavigation(activity, theme, legacy);
-        // Existing navigation listeners and every setting/start-stop listener remain attached.
         legacy.pauseDecoration();
         activity.getApplication().registerActivityLifecycleCallbacks(this);
-        android.util.Log.i("FoxUI", "Presentation installed; VPN and session are explicitly user-driven");
+        android.util.Log.i("FoxUI", "Presentation installed; Freeze analog is wired into dashboard");
     }
 
     private void disableSessionBeforeDisconnect() {
@@ -147,14 +167,24 @@ public final class FoxDashboard implements Application.ActivityLifecycleCallback
         primary.setTextColor(sessionRunning ? FoxTheme.TEXT : (vpnConnected ? FoxTheme.TEXT : FoxTheme.MUTED));
     }
 
+    private void paintAnalog(boolean enabled) {
+        if (analogToggle == null) return;
+        analogToggle.setText(enabled ? "ANALOG ON" : "ENABLE ANALOG");
+        analogToggle.setTextColor(enabled ? FoxTheme.TEXT : FoxTheme.MUTED);
+        analogToggle.setBackground(theme.surface(enabled ? ANALOG_ACTIVE : ANALOG_IDLE, 12));
+    }
+
     private void compactPreview(View view) {
         if (view.getClass().getName().endsWith("$RexPedestalView")) {
             ViewGroup.LayoutParams lp = view.getLayoutParams();
-            if (lp != null) { lp.height = theme.dp(140); view.setLayoutParams(lp); }
+            if (lp != null) {
+                lp.height = theme.dp(140);
+                view.setLayoutParams(lp);
+            }
         }
         if (view instanceof ViewGroup) {
             ViewGroup group = (ViewGroup) view;
-            for (int i=0; i<group.getChildCount(); i++) compactPreview(group.getChildAt(i));
+            for (int i = 0; i < group.getChildCount(); i++) compactPreview(group.getChildAt(i));
         }
     }
 
@@ -162,9 +192,11 @@ public final class FoxDashboard implements Application.ActivityLifecycleCallback
         String type = view.getClass().getName();
         if (type.endsWith("$RexMotionBackgroundView") || type.endsWith("$RexEnergyRailView")
                 || type.endsWith("$RexSessionPulseView") || type.endsWith("$RexReadinessRingView")) {
-            view.setVisibility(View.GONE); return;
+            view.setVisibility(View.GONE);
+            return;
         }
-        view.setAlpha(1f); view.setTranslationY(0f);
+        view.setAlpha(1f);
+        view.setTranslationY(0f);
         if (view instanceof TextView) {
             TextView text = (TextView) view;
             text.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
@@ -182,7 +214,7 @@ public final class FoxDashboard implements Application.ActivityLifecycleCallback
         }
         if (view instanceof ViewGroup) {
             ViewGroup group = (ViewGroup) view;
-            for (int i=0; i<group.getChildCount(); i++) quietStyle(group.getChildAt(i));
+            for (int i = 0; i < group.getChildCount(); i++) quietStyle(group.getChildAt(i));
         }
     }
 
@@ -193,15 +225,21 @@ public final class FoxDashboard implements Application.ActivityLifecycleCallback
         handler.post(refresh);
         legacy.pauseDecoration();
     }
+
     @Override public void onActivityPaused(Activity owner) {
-        if (owner == activity) { active = false; handler.removeCallbacks(refresh); }
+        if (owner == activity) {
+            active = false;
+            handler.removeCallbacks(refresh);
+        }
     }
+
     @Override public void onActivityDestroyed(Activity owner) {
         if (owner != activity) return;
         active = false;
         handler.removeCallbacksAndMessages(null);
         activity.getApplication().unregisterActivityLifecycleCallbacks(this);
     }
+
     @Override public void onActivityCreated(Activity a, Bundle b) {}
     @Override public void onActivityStarted(Activity a) {}
     @Override public void onActivityStopped(Activity a) {}
