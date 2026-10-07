@@ -79,9 +79,15 @@ if __name__ == "__main__":
     parser.add_argument("report", type=Path)
     args = parser.parse_args()
 
-    # Feature-branch discovery pass: read-only and kept separate from the repair itself.
+    # Read-only discovery pass. Persist it beside the normal audit output so it
+    # survives GitHub Actions and can be inspected without changing legacy code.
     inspector = Path("scripts/inspect_freeze.py")
     if inspector.exists():
-        subprocess.run([sys.executable, str(inspector), str(args.decoded)], check=True)
+        discovery = subprocess.run(
+            [sys.executable, str(inspector), str(args.decoded)],
+            check=True, text=True, capture_output=True,
+        ).stdout
+        print(discovery, end="")
+        (args.report.parent / "freeze-discovery.txt").write_text(discovery)
 
     args.report.write_text(json.dumps({"changed": repair(args.decoded)}, indent=2))
