@@ -4,6 +4,8 @@ import argparse
 import hashlib
 import json
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 LOGIN = '''.method protected onCreate(Landroid/os/Bundle;)V
@@ -76,4 +78,10 @@ if __name__ == "__main__":
     parser.add_argument("decoded", type=Path)
     parser.add_argument("report", type=Path)
     args = parser.parse_args()
+
+    # Feature-branch discovery pass: read-only and kept separate from the repair itself.
+    inspector = Path("scripts/inspect_freeze.py")
+    if inspector.exists():
+        subprocess.run([sys.executable, str(inspector), str(args.decoded)], check=True)
+
     args.report.write_text(json.dumps({"changed": repair(args.decoded)}, indent=2))
