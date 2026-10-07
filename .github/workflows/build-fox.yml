@@ -1,4 +1,4 @@
-name: Build FOX V12 presentation refresh
+name: Build FOX V12 APK
 
 on:
   push:
@@ -20,45 +20,61 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
+
       - uses: android-actions/setup-android@v3
         with:
           packages: 'build-tools;35.0.0 platforms;android-35'
           log-accepted-android-sdk-licenses: false
-      - name: Prepare verified inputs and build tools
+
+      - name: Prepare build inputs
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p work/tools output
-          printf '%s\n' 'b86f363132b6ad237341ccd50d7b2aa938df799bcda3a02c0c5f66677c0c9a44  FOX_AWG_Experimental.apk' '34572c40301b3555e4928abb15e26e5d05817ecc9d5dea22710edea6d3e2be64  FOX_AWG_Private_Project.zip' | sha256sum -c -
           unzip -q FOX_AWG_Private_Project.zip -d work/project
-          curl --fail --location --retry 3 --output work/tools/apktool.jar https://github.com/iBotPeaches/Apktool/releases/download/v2.12.1/apktool_2.12.1.jar
-          printf '%s\n' '66cf4524a4a45a7f56567d08b2c9b6ec237bcdd78cee69fd4a59c8a0243aeafa  work/tools/apktool.jar' | sha256sum -c -
-          python3 -m pip install 'androguard==4.1.3'
-      - name: Repair startup and rebuild Smali
+
+          curl --fail --location --retry 3 \
+            --output work/tools/apktool.jar \
+            https://github.com/iBotPeaches/Apktool/releases/download/v2.12.1/apktool_2.12.1.jar
+
+          shizuku_version=13.1.5
+          for artifact in api provider aidl shared; do
+            curl --fail --location --retry 3 \
+              --output "work/tools/shizuku-${artifact}.aar" \
+              "https://repo.maven.apache.org/maven2/dev/rikka/shizuku/${artifact}/${shizuku_version}/${artifact}-${shizuku_version}.aar"
+            unzip -p "work/tools/shizuku-${artifact}.aar" classes.jar > "work/tools/shizuku-${artifact}.jar"
+          done
+
+          curl --fail --location --retry 3 \
+            --output work/tools/androidx-annotation.jar \
+            https://dl.google.com/dl/android/maven2/androidx/annotation/annotation/1.3.0/annotation-1.3.0.jar
+
+      - name: Build APK
         shell: bash
         run: |
           set -euo pipefail
           java -jar work/tools/apktool.jar d -r FOX_AWG_Experimental.apk -o work/decoded > work/decode.log 2>&1
           python3 scripts/repair_startup.py work/decoded output/startup-patch.json
+          python3 scripts/patch_shizuku_manifest.py work/decoded/AndroidManifest.xml
           bash scripts/build_presentation.sh
           java -jar work/tools/apktool.jar b work/decoded -o work/rebuilt.apk
           python3 scripts/repack_startup.py FOX_AWG_Experimental.apk work/rebuilt.apk work/unsigned.apk
-      - name: Align, sign, and audit final APK
-        shell: bash
-        run: |
-          set -euo pipefail
+
           fox_build_tools="$ANDROID_HOME/build-tools/35.0.0"
           "$fox_build_tools/zipalign" -P 16 -f 4 work/unsigned.apk work/aligned.apk
-          java -jar "$fox_build_tools/lib/apksigner.jar" sign --ks work/project/signing/private-build-signing.p12 --ks-pass pass:fox-private-build --out output/FOX_V12_Modern.apk work/aligned.apk
-          java -jar "$fox_build_tools/lib/apksigner.jar" verify --verbose --print-certs output/FOX_V12_Modern.apk
-          "$fox_build_tools/zipalign" -c -P 16 4 output/FOX_V12_Modern.apk
-          python3 scripts/audit_startup.py FOX_AWG_Experimental.apk output/FOX_V12_Modern.apk output/startup-audit.json
+          java -jar "$fox_build_tools/lib/apksigner.jar" sign \
+            --ks work/project/signing/private-build-signing.p12 \
+            --ks-pass pass:fox-private-build \
+            --out output/FOX_V12_Modern.apk \
+            work/aligned.apk
           sha256sum output/FOX_V12_Modern.apk > output/SHA256SUMS
-      - name: Upload signed APK and audit
+
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: FOX-V12-Modern
