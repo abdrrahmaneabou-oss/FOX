@@ -24,6 +24,7 @@ final class ShizukuInputBridge {
 
     private final Listener listener;
     private final Shizuku.UserServiceArgs args;
+    private volatile boolean apiRegistered;
     private volatile IBinder remote;
     private volatile boolean binding;
     private volatile boolean permissionRequested;
@@ -70,20 +71,35 @@ final class ShizukuInputBridge {
             if (result == PackageManager.PERMISSION_GRANTED) bind();
             else if (this.listener != null) this.listener.onInputBridgePermissionDenied();
         };
-        args = new Shizuku.UserServiceArgs(
-                new ComponentName(app.getPackageName(), PrivilegedInputService.class.getName()))
-                .daemon(false)
-                .processNameSuffix("freeze_input")
-                .debuggable(false)
-                .version(2);
-        Shizuku.addBinderReceivedListenerSticky(binderListener);
-        Shizuku.addBinderDeadListener(deadListener);
-        Shizuku.addRequestPermissionResultListener(permissionListener);
+
+        Shizuku.UserServiceArgs builtArgs = null;
+        try {
+            builtArgs = new Shizuku.UserServiceArgs(
+                    new ComponentName(app.getPackageName(), PrivilegedInputService.class.getName()))
+                    .daemon(false)
+                    .processNameSuffix("freeze_input")
+                    .debuggable(false)
+                    .version(2);
+            Shizuku.addBinderReceivedListenerSticky(binderListener);
+            Shizuku.addBinderDeadListener(deadListener);
+            Shizuku.addRequestPermissionResultListener(permissionListener);
+            apiRegistered = true;
+        } catch (Throwable error) {
+            // Shizuku is an optional privileged backend. It must never be allowed
+            // to take down FOX during Activity/UI startup if the provider/runtime
+            // is unavailable, incompatible, or not started yet.
+            android.util.Log.e("FoxShizukuInput", "Shizuku bootstrap unavailable", error);
+            try { Shizuku.removeBinderReceivedListener(binderListener); } catch (Throwable ignored) {}
+            try { Shizuku.removeBinderDeadListener(deadListener); } catch (Throwable ignored) {}
+            try { Shizuku.removeRequestPermissionResultListener(permissionListener); } catch (Throwable ignored) {}
+            apiRegistered = false;
+        }
+        args = builtArgs;
     }
 
     boolean isReady() {
         IBinder b = remote;
-        return b != null && b.pingBinder() && backendKind > 0;
+        return apiRegistered && b != null && b.pingBinder() && backendKind > 0;
     }
 
     int getBackendKind() {
@@ -92,6 +108,7 @@ final class ShizukuInputBridge {
 
     /** Side-effect-free state check used by the dashboard refresh loop. */
     int peekState() {
+        if (!apiRegistered) return UNAVAILABLE;
         if (isReady()) return READY;
         try {
             if (!Shizuku.pingBinder()) return UNAVAILABLE;
@@ -106,6 +123,7 @@ final class ShizukuInputBridge {
 
     /** Starts permission/binding work after an explicit user action. */
     int ensureReady() {
+        if (!apiRegistered || args == null) return UNAVAILABLE;
         if (isReady()) return READY;
         try {
             if (!Shizuku.pingBinder()) return UNAVAILABLE;
@@ -127,7 +145,7 @@ final class ShizukuInputBridge {
 
     boolean sendTouch(int action, long downTime, long eventTime, float x, float y) {
         IBinder b = remote;
-        if (b == null || !b.pingBinder() || backendKind <= 0) return false;
+        if (!apiRegistered || b == null || !b.pingBinder() || backendKind <= 0) return false;
         Parcel data = Parcel.obtain();
         try {
             data.writeInterfaceToken(PrivilegedInputService.DESCRIPTOR);
@@ -152,21 +170,25 @@ final class ShizukuInputBridge {
     }
 
     void shutdown() {
-        try { Shizuku.unbindUserService(args, connection, true); } catch (Throwable ignored) {}
-        try { Shizuku.removeBinderReceivedListener(binderListener); } catch (Throwable ignored) {}
-        try { Shizuku.removeBinderDeadListener(deadListener); } catch (Throwable ignored) {}
-        try { Shizuku.removeRequestPermissionResultListener(permissionListener); } catch (Throwable ignored) {}
+        if (apiRegistered && args != null) {
+            try { Shizuku.unbindUserService(args, connection, true); } catch (Throwable ignored) {}
+            try { Shizuku.removeBinderReceivedListener(binderListener); } catch (Throwable ignored) {}
+            try { Shizuku.removeBinderDeadListener(deadListener); } catch (Throwable ignored) {}
+            try { Shizuku.removeRequestPermissionResultListener(permissionListener); } catch (Throwable ignored) {}
+        }
+        apiRegistered = false;
         invalidate();
     }
 
     private void onBinderReceived() {
+        if (!apiRegistered) return;
         try {
             if (Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED) bind();
         } catch (Throwable ignored) {}
     }
 
     private synchronized void bind() {
-        if (binding || isReady()) return;
+        if (!apiRegistered || args == null || binding || isReady()) return;
         try {
             if (!Shizuku.pingBinder()) return;
             if (Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) return;
