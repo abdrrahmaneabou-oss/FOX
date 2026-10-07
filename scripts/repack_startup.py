@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Repair startup DEX and restore the identity expected by NP resource loader."""
+"""Repair startup DEX, keep rebuilt Shizuku manifest, and restore NP resource identity."""
 import argparse
 import copy
 import zipfile
@@ -18,7 +18,10 @@ with zipfile.ZipFile(a.baseline) as before, zipfile.ZipFile(a.rebuilt) as rebuil
         name = entry.filename
         if name.upper().startswith("META-INF/") and name.upper().endswith((".RSA", ".DSA", ".EC", ".SF", "MANIFEST.MF")):
             continue
-        data = rebuilt.read(name) if name in ("classes.dex", "classes2.dex", "classes3.dex") else before.read(name)
+        if name in ("classes.dex", "classes2.dex", "classes3.dex", "AndroidManifest.xml"):
+            data = rebuilt.read(name)
+        else:
+            data = before.read(name)
         if name == "AndroidManifest.xml":
             old, new = "com.fox.awg12", "com.fox.onev8"
             assert len(old) == len(new)
