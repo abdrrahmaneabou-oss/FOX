@@ -17,9 +17,12 @@ def install(decoded, source):
         shutil.rmtree(ui_dir)
 
     # A previous build must never leave stale Shizuku runtime classes behind.
-    shizuku_dir = decoded / 'smali_classes3/rikka/shizuku'
-    if shizuku_dir.exists():
-        shutil.rmtree(shizuku_dir)
+    for runtime_dir in (
+        decoded / 'smali_classes3/rikka/shizuku',
+        decoded / 'smali_classes3/moe/shizuku/api',
+    ):
+        if runtime_dir.exists():
+            shutil.rmtree(runtime_dir)
 
     copied = 0
     for path in source.rglob('*.smali'):
@@ -29,6 +32,7 @@ def install(decoded, source):
             name.startswith('com/ponie/dayov12/ui/')
             or name.startswith('com/ponie/dayov12/FoxAwgUi')
             or name.startswith('rikka/shizuku/')
+            or name.startswith('moe/shizuku/api/')
         )
         assert allowed, name
         target = decoded / 'smali_classes3' / relative
@@ -38,6 +42,7 @@ def install(decoded, source):
     assert copied > 0
     assert (decoded / 'smali_classes3/rikka/shizuku/Shizuku.smali').exists(), 'Shizuku runtime missing from DEX'
     assert (decoded / 'smali_classes3/rikka/shizuku/ShizukuProvider.smali').exists(), 'Shizuku provider runtime missing from DEX'
+    assert (decoded / 'smali_classes3/moe/shizuku/api/BinderContainer.smali').exists(), 'Shizuku API BinderContainer missing from DEX'
 
     # Honor V12's existing reduced-motion path, avoiding continuous decorative loops.
     main = decoded / 'smali_classes2/com/ponie/dayov12/MainActivity.smali'
