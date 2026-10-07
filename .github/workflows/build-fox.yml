@@ -42,12 +42,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Shizuku adds a provider/permissions to AndroidManifest.xml. Do not use
-          # apktool --no-res (-r) here: that mode deliberately leaves the manifest
-          # as binary AXML, which ElementTree cannot merge and apktool cannot
-          # recompile after our manifest edits. Decode resources/manifest normally
-          # while preserving the existing smali repair pipeline.
-          java -jar work/tools/apktool.jar d FOX_AWG_Experimental.apk -o work/decoded > work/decode.log 2>&1
+          # Keep FOX's compiled resource table byte-for-byte. A normal apktool
+          # resource decode produces malformed synthetic mipmap/layout aliases for
+          # this APK that aapt2 cannot compile again. Decode the working tree with
+          # --no-res, then obtain only a textual manifest from a separate no-src
+          # decode and place that manifest into the raw-resource working tree.
+          java -jar work/tools/apktool.jar d -r FOX_AWG_Experimental.apk -o work/decoded > work/decode.log 2>&1
+          java -jar work/tools/apktool.jar d -s FOX_AWG_Experimental.apk -o work/manifest-decoded > work/manifest-decode.log 2>&1
+          cp work/manifest-decoded/AndroidManifest.xml work/decoded/AndroidManifest.xml
           python3 scripts/inspect_freeze.py work/decoded > output/freeze-inspection.txt
           python3 scripts/repair_startup.py work/decoded output/startup-patch.json
           bash scripts/build_presentation.sh
