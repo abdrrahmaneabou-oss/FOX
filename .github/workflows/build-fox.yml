@@ -2,7 +2,7 @@ name: Build FOX V12 presentation refresh
 
 on:
   push:
-    branches: [main]
+    branches: [main, shizuku-engine-v47]
     paths:
       - 'scripts/**'
       - 'src/**'
@@ -46,6 +46,10 @@ jobs:
           python3 scripts/inspect_freeze.py work/decoded > output/freeze-inspection.txt
           python3 scripts/repair_startup.py work/decoded output/startup-patch.json
           bash scripts/build_presentation.sh
+          python3 scripts/merge_shizuku_manifest.py \
+            work/decoded/AndroidManifest.xml \
+            work/presentation/deps/api/AndroidManifest.xml \
+            work/presentation/deps/provider/AndroidManifest.xml
           java -jar work/tools/apktool.jar b work/decoded -o work/rebuilt.apk
           python3 scripts/repack_startup.py FOX_AWG_Experimental.apk work/rebuilt.apk work/unsigned.apk
       - name: Align, sign, and audit final APK
