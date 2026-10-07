@@ -1,0 +1,48 @@
+name: Keep latest FOX CI run
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/**'
+      - 'src/**'
+      - '.github/workflows/**'
+      - 'FOX_AWG_Experimental.apk'
+      - 'FOX_AWG_Private_Project.zip'
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  cancel-stale-runs:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - name: Cancel older build-fox runs
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          CURRENT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          cancel_status() {
+            local status="$1"
+            gh api \
+              -H 'Accept: application/vnd.github+json' \
+              "/repos/$REPO/actions/workflows/build-fox.yml/runs?branch=main&status=$status&per_page=100" \
+              --jq ".workflow_runs[] | select(.head_sha != \"$CURRENT_SHA\") | .id" \
+            | while read -r run_id; do
+                [[ -n "$run_id" ]] || continue
+                echo "Cancelling stale FOX run $run_id ($status)"
+                gh api --method POST \
+                  -H 'Accept: application/vnd.github+json' \
+                  "/repos/$REPO/actions/runs/$run_id/cancel" \
+                  >/dev/null 2>&1 || true
+              done
+          }
+
+          cancel_status queued
+          cancel_status in_progress
