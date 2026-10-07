@@ -16,8 +16,8 @@ import android.view.WindowManager;
  * Runtime state machine and visual layer for the independent hold-to-Freeze analog.
  *
  * Normal mode is deliberately FLAG_NOT_TOUCHABLE. A privileged/global input source
- * feeds pointer coordinates through {@link #onPointer}; therefore the game remains
- * the real Android touch target instead of relying on fake overlay "pass through".
+ * feeds pointer coordinates through {@link #onPointer}; the original physical touch
+ * therefore keeps its normal Android target underneath this visual overlay.
  */
 final class FreezeAnalogController {
     interface SettingsRequestListener {
@@ -242,6 +242,11 @@ final class FreezeAnalogController {
 
     private void rebuildParams() {
         int diameter = Math.max(1, Math.round(px(settings.baseDp)));
+        int screenW = context.getResources().getDisplayMetrics().widthPixels;
+        int screenH = context.getResources().getDisplayMetrics().heightPixels;
+        settings.x = clamp(settings.x, 0, Math.max(0, screenW - diameter));
+        settings.y = clamp(settings.y, 0, Math.max(0, screenH - diameter));
+
         int type = Build.VERSION.SDK_INT >= 26
                 ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
                 : WindowManager.LayoutParams.TYPE_PHONE;
