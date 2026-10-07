@@ -21,8 +21,8 @@ curl --fail --location --retry 3 \
   --output work/presentation/deps/provider.aar \
   "$shizuku_base/provider/$shizuku_version/provider-$shizuku_version.aar"
 
-# Keep both the bytecode and the library manifests. The latter are merged into
-# FOX explicitly because this project intentionally does not use Gradle manifest merging.
+# Keep both bytecode and library manifests. This project intentionally avoids
+# Gradle manifest merging, so Shizuku entries are merged explicitly below.
 unzip -qo work/presentation/deps/api.aar classes.jar AndroidManifest.xml -d work/presentation/deps/api
 unzip -qo work/presentation/deps/provider.aar classes.jar AndroidManifest.xml -d work/presentation/deps/provider
 
@@ -41,8 +41,8 @@ with zipfile.ZipFile('work/presentation/ui.jar','w') as z:
             z.write(p,rel)
 PY
 
-# D8 must receive the Shizuku jars as program inputs, not just javac classpath.
-# #46 only compiled against them, which meant no Shizuku runtime existed in the APK.
+# Shizuku must be a real runtime dependency. #46 only put these jars on javac's
+# classpath, which produced a decorative client with no Shizuku runtime in the APK.
 java -cp "$fox_tools/lib/d8.jar" com.android.tools.r8.D8 \
   --release --min-api 29 --lib "$fox_android_jar" \
   --output work/presentation/dex \
@@ -59,3 +59,10 @@ PY
 
 java -jar work/tools/apktool.jar d -r work/presentation/ui.apk -o work/presentation/decoded > work/presentation/decode.log 2>&1
 python3 scripts/install_presentation.py work/decoded work/presentation/decoded/smali
+
+# Provider + Shizuku permission metadata must live in FOX's final manifest, not
+# merely in the downloaded AARs.
+python3 scripts/merge_shizuku_manifest.py \
+  work/decoded/AndroidManifest.xml \
+  work/presentation/deps/api/AndroidManifest.xml \
+  work/presentation/deps/provider/AndroidManifest.xml
