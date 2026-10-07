@@ -61,21 +61,8 @@ public final class PrivilegedInputService extends Binder {
     }
 
     private synchronized boolean inject(int action, long downTime, long eventTime, float x, float y) {
-        MotionEvent event = MotionEvent.obtain(
-                downTime,
-                eventTime,
-                action,
-                x,
-                y,
-                1.0f,
-                1.0f,
-                0,
-                1.0f,
-                1.0f,
-                0,
-                0,
-                InputDevice.SOURCE_TOUCHSCREEN,
-                0);
+        MotionEvent event = MotionEvent.obtain(downTime, eventTime, action, x, y, 0);
+        event.setSource(InputDevice.SOURCE_TOUCHSCREEN);
         try {
             ensureInputManager();
             Object result = injectMethod.invoke(inputManager, event, INJECT_ASYNC);
