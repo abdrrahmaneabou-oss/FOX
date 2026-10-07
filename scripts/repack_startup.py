@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Repair startup DEX, keep rebuilt Shizuku manifest, and restore NP resource identity."""
+"""Repair startup DEX, keep binary Shizuku manifest, and restore NP resource identity."""
 import argparse
 import copy
 import zipfile
@@ -9,29 +9,40 @@ p = argparse.ArgumentParser()
 p.add_argument("baseline", type=Path)
 p.add_argument("rebuilt", type=Path)
 p.add_argument("output", type=Path)
+p.add_argument("--manifest-apk", type=Path, default=None,
+               help="APK containing the separately compiled binary AndroidManifest.xml")
 a = p.parse_args()
 original = Path("work/project/input/FOX_ORIGINAL.apk")
 with zipfile.ZipFile(original) as legacy, zipfile.ZipFile(original, metadata_encoding="utf-8") as correct:
     restored_names = {old.filename: new.filename for old, new in zip(legacy.infolist(), correct.infolist()) if old.filename != new.filename}
-with zipfile.ZipFile(a.baseline) as before, zipfile.ZipFile(a.rebuilt) as rebuilt, zipfile.ZipFile(a.output, "w") as after:
-    for entry in before.infolist():
-        name = entry.filename
-        if name.upper().startswith("META-INF/") and name.upper().endswith((".RSA", ".DSA", ".EC", ".SF", "MANIFEST.MF")):
-            continue
-        if name in ("classes.dex", "classes2.dex", "classes3.dex", "AndroidManifest.xml"):
-            data = rebuilt.read(name)
-        else:
-            data = before.read(name)
-        if name == "AndroidManifest.xml":
-            old, new = "com.fox.awg12", "com.fox.onev8"
-            assert len(old) == len(new)
-            assert old.encode("utf-16le") in data or old.encode() in data
-            for encoding in ("utf-8", "utf-16le"):
-                data = data.replace(old.encode(encoding), new.encode(encoding))
-        target = copy.copy(entry)
-        if name in restored_names:
-            target.filename = restored_names[name]
-            target.orig_filename = target.filename
-        after.writestr(target, data)
+
+manifest_zip = zipfile.ZipFile(a.manifest_apk) if a.manifest_apk else None
+try:
+    with zipfile.ZipFile(a.baseline) as before, zipfile.ZipFile(a.rebuilt) as rebuilt, zipfile.ZipFile(a.output, "w") as after:
+        for entry in before.infolist():
+            name = entry.filename
+            if name.upper().startswith("META-INF/") and name.upper().endswith((".RSA", ".DSA", ".EC", ".SF", "MANIFEST.MF")):
+                continue
+            if name == "AndroidManifest.xml" and manifest_zip is not None:
+                data = manifest_zip.read(name)
+            elif name in ("classes.dex", "classes2.dex", "classes3.dex", "AndroidManifest.xml"):
+                data = rebuilt.read(name)
+            else:
+                data = before.read(name)
+            if name == "AndroidManifest.xml":
+                old, new = "com.fox.awg12", "com.fox.onev8"
+                assert len(old) == len(new)
+                assert old.encode("utf-16le") in data or old.encode() in data
+                for encoding in ("utf-8", "utf-16le"):
+                    data = data.replace(old.encode(encoding), new.encode(encoding))
+            target = copy.copy(entry)
+            if name in restored_names:
+                target.filename = restored_names[name]
+                target.orig_filename = target.filename
+            after.writestr(target, data)
+finally:
+    if manifest_zip is not None:
+        manifest_zip.close()
+
 with zipfile.ZipFile(a.output) as check:
     assert check.testzip() is None
