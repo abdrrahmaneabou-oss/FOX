@@ -95,7 +95,7 @@ final class FreezeAnalogController {
         switch (action) {
             case MotionEvent.ACTION_DOWN:
             case MotionEvent.ACTION_POINTER_DOWN:
-                if (tracking || !contains(rawX, rawY)) return false;
+                if (tracking || !containsKnob(rawX, rawY)) return false;
                 tracking = true;
                 pointerId = id;
                 downX = rawX;
@@ -114,7 +114,7 @@ final class FreezeAnalogController {
             case MotionEvent.ACTION_UP:
             case MotionEvent.ACTION_POINTER_UP:
                 if (!tracking || id != pointerId) return false;
-                boolean tap = tapCandidate && contains(rawX, rawY);
+                boolean tap = tapCandidate && containsKnob(rawX, rawY);
                 finishHold();
                 if (tap) registerTap(eventTime);
                 return true;
@@ -185,11 +185,12 @@ final class FreezeAnalogController {
         mainHandler.removeCallbacksAndMessages(null);
     }
 
-    private boolean contains(float rawX, float rawY) {
-        float radius = px(settings.baseDp) / 2f;
-        float cx = settings.x + radius;
-        float cy = settings.y + radius;
-        return distance(rawX - cx, rawY - cy) <= radius;
+    private boolean containsKnob(float rawX, float rawY) {
+        float baseRadius = px(settings.baseDp) / 2f;
+        float knobRadius = px(settings.knobDp) / 2f;
+        float cx = settings.x + baseRadius + view.offset[0];
+        float cy = settings.y + baseRadius + view.offset[1];
+        return distance(rawX - cx, rawY - cy) <= knobRadius;
     }
 
     private void updateKnob(float rawX, float rawY) {
@@ -317,9 +318,10 @@ final class FreezeAnalogController {
             }
 
             boolean handled = onPointer(action, id, rawX, rawY, event.getEventTime());
+            boolean capturedStream = handled || tracking;
 
             TouchRelay relay = touchRelay;
-            if (relay != null) {
+            if (relay != null && capturedStream) {
                 MotionEvent copy = MotionEvent.obtain(event);
                 try { relay.relay(copy); }
                 catch (RuntimeException relayError) {
@@ -328,7 +330,7 @@ final class FreezeAnalogController {
                     copy.recycle();
                 }
             }
-            return handled || tracking;
+            return capturedStream;
         }
     }
 
