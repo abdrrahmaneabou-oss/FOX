@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build presentation only. Backend classes are compile-only stubs, never packaged.
+# Build the presentation layer and the Shizuku client runtime without touching FOX backend code.
 set -euo pipefail
 
 fox_android_jar="$ANDROID_HOME/platforms/android-35/android.jar"
@@ -7,22 +7,24 @@ fox_tools="$ANDROID_HOME/build-tools/35.0.0"
 shizuku_version="13.1.5"
 shizuku_base="https://repo1.maven.org/maven2/dev/rikka/shizuku"
 
+rm -rf work/presentation
 mkdir -p \
   work/presentation/classes \
   work/presentation/dex \
   work/presentation/deps/api \
   work/presentation/deps/provider
 
-# Keep the known-good #40 build flow. Shizuku is only staged on the compiler
-# classpath here; runtime packaging is added separately after this gate passes.
 curl --fail --location --retry 3 \
   --output work/presentation/deps/api.aar \
   "$shizuku_base/api/$shizuku_version/api-$shizuku_version.aar"
 curl --fail --location --retry 3 \
   --output work/presentation/deps/provider.aar \
   "$shizuku_base/provider/$shizuku_version/provider-$shizuku_version.aar"
-unzip -qo work/presentation/deps/api.aar classes.jar -d work/presentation/deps/api
-unzip -qo work/presentation/deps/provider.aar classes.jar -d work/presentation/deps/provider
+
+# Keep both the bytecode and the library manifests. The latter are merged into
+# FOX explicitly because this project intentionally does not use Gradle manifest merging.
+unzip -qo work/presentation/deps/api.aar classes.jar AndroidManifest.xml -d work/presentation/deps/api
+unzip -qo work/presentation/deps/provider.aar classes.jar AndroidManifest.xml -d work/presentation/deps/provider
 
 fox_cp="$fox_android_jar:work/presentation/deps/api/classes.jar:work/presentation/deps/provider/classes.jar"
 find src/presentation/java src/presentation/stubs -name '*.java' -print > work/presentation/sources.txt
@@ -39,9 +41,14 @@ with zipfile.ZipFile('work/presentation/ui.jar','w') as z:
             z.write(p,rel)
 PY
 
+# D8 must receive the Shizuku jars as program inputs, not just javac classpath.
+# #46 only compiled against them, which meant no Shizuku runtime existed in the APK.
 java -cp "$fox_tools/lib/d8.jar" com.android.tools.r8.D8 \
   --release --min-api 29 --lib "$fox_android_jar" \
-  --output work/presentation/dex work/presentation/ui.jar
+  --output work/presentation/dex \
+  work/presentation/ui.jar \
+  work/presentation/deps/api/classes.jar \
+  work/presentation/deps/provider/classes.jar
 
 python3 - <<'PY'
 import zipfile
