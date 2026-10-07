@@ -116,23 +116,17 @@ final class FreezeAnalogManager implements
         if (!enabled || !inputBridge.isReady()) return;
         int action = event.getActionMasked();
         if (action != MotionEvent.ACTION_DOWN
-                && action != MotionEvent.ACTION_POINTER_DOWN
                 && action != MotionEvent.ACTION_MOVE
                 && action != MotionEvent.ACTION_UP
-                && action != MotionEvent.ACTION_POINTER_UP
                 && action != MotionEvent.ACTION_CANCEL) {
             return;
         }
 
-        int index = action == MotionEvent.ACTION_MOVE ? 0 : event.getActionIndex();
-        if (index < 0 || index >= event.getPointerCount()) index = 0;
-        float rawX = event.getRawX(index);
-        float rawY = event.getRawY(index);
         inputBridge.sendTouch(
                 action,
                 event.getDownTime(),
                 event.getEventTime(),
-                rawX,
-                rawY);
+                event.getRawX(),
+                event.getRawY());
     }
 }
