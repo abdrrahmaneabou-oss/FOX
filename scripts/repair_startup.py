@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Repair the two startup methods; keep all packet processing untouched."""
+"""Repair startup wrappers and register the user-authorized Shizuku bridge."""
 import argparse
 import hashlib
 import json
@@ -37,9 +37,42 @@ MAIN = '''.method public onCreate(Landroid/os/Bundle;)V
     return-void
 .end method'''
 
+SHIZUKU_PROVIDER = '''
+        <provider
+            android:name="rikka.shizuku.ShizukuProvider"
+            android:authorities="com.fox.onev8.shizuku"
+            android:enabled="true"
+            android:exported="true"
+            android:multiprocess="false"
+            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
+'''
+
+
+def digest(text):
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+def register_shizuku_provider(root, changes):
+    path = root / "AndroidManifest.xml"
+    before = path.read_text()
+    assert 'package="com.fox.onev8"' in before, "Unexpected package while registering Shizuku"
+    if 'rikka.shizuku.ShizukuProvider' in before:
+        return
+    assert before.count('</application>') == 1, "Unexpected application manifest shape"
+    after = before.replace('</application>', SHIZUKU_PROVIDER + '    </application>', 1)
+    path.write_text(after)
+    changes.append({
+        "file": str(path.relative_to(root)),
+        "before": digest(before),
+        "after": digest(after),
+        "change": "register_shizuku_provider",
+    })
+
 
 def repair(root):
     changes = []
+    register_shizuku_provider(root, changes)
+
     for name, replacement in (("LoginActivity", LOGIN), ("MainActivity", MAIN)):
         path = root / "smali_classes2/com/ponie/dayov12" / (name + ".smali")
         before = path.read_text()
@@ -61,7 +94,8 @@ def repair(root):
             # Preserve the original three-code-unit width and all branch offsets.
             after = after.replace(gate, "nop\n    nop\n    nop", 1)
         path.write_text(after)
-        changes.append({"file": str(path.relative_to(root)), "before": hashlib.sha256(before.encode()).hexdigest(), "after": hashlib.sha256(after.encode()).hexdigest()})
+        changes.append({"file": str(path.relative_to(root)), "before": digest(before), "after": digest(after)})
+
     # Suppress only the remote update dialog invocation; retain fetch and checks.
     path = root / "smali/androidx/work/impl/workers/ExpDialog$FetchUpdateConfigTask.smali"
     before = path.read_text()
@@ -69,7 +103,7 @@ def repair(root):
     assert before.count(call) == 1, "Unexpected update dialog implementation"
     after = before.replace(call, "nop\n    nop\n    nop", 1)
     path.write_text(after)
-    changes.append({"file": str(path.relative_to(root)), "before": hashlib.sha256(before.encode()).hexdigest(), "after": hashlib.sha256(after.encode()).hexdigest()})
+    changes.append({"file": str(path.relative_to(root)), "before": digest(before), "after": digest(after)})
     return changes
 
 
