@@ -42,7 +42,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          java -jar work/tools/apktool.jar d -r FOX_AWG_Experimental.apk -o work/decoded > work/decode.log 2>&1
+          # Shizuku adds a provider/permissions to AndroidManifest.xml. Do not use
+          # apktool --no-res (-r) here: that mode deliberately leaves the manifest
+          # as binary AXML, which ElementTree cannot merge and apktool cannot
+          # recompile after our manifest edits. Decode resources/manifest normally
+          # while preserving the existing smali repair pipeline.
+          java -jar work/tools/apktool.jar d FOX_AWG_Experimental.apk -o work/decoded > work/decode.log 2>&1
           python3 scripts/inspect_freeze.py work/decoded > output/freeze-inspection.txt
           python3 scripts/repair_startup.py work/decoded output/startup-patch.json
           bash scripts/build_presentation.sh
