@@ -1,15 +1,14 @@
 package com.ponie.dayov12.ui;
 
 import android.content.Context;
+import android.view.MotionEvent;
 
-/**
- * Process-wide owner for the independent Freeze analog feature.
- *
- * The dashboard card is intentionally not wired yet. The eventual input bridge only
- * needs to call {@link #onGlobalPointer}; all Freeze/geometry/settings behavior stays
- * behind this small boundary.
- */
+/** Process-wide owner for the independent Freeze analog feature. */
 final class FreezeAnalogManager implements FreezeAnalogController.SettingsRequestListener {
+    interface TouchRelay {
+        void relay(MotionEvent event);
+    }
+
     private static volatile FreezeAnalogManager instance;
 
     static FreezeAnalogManager get(Context context) {
@@ -34,6 +33,14 @@ final class FreezeAnalogManager implements FreezeAnalogController.SettingsReques
         this.context = context;
         this.controller = new FreezeAnalogController(context);
         this.controller.setSettingsRequestListener(this);
+    }
+
+    synchronized void setTouchRelay(final TouchRelay relay) {
+        if (relay == null) {
+            controller.setTouchRelay(null);
+        } else {
+            controller.setTouchRelay(relay::relay);
+        }
     }
 
     synchronized void setEnabled(boolean value) {
@@ -70,6 +77,7 @@ final class FreezeAnalogManager implements FreezeAnalogController.SettingsReques
     synchronized void shutdown() {
         enabled = false;
         closeSettings(false);
+        controller.setTouchRelay(null);
         controller.shutdown();
         if (instance == this) instance = null;
     }
