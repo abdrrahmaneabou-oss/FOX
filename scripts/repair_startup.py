@@ -37,6 +37,10 @@ MAIN = '''.method public onCreate(Landroid/os/Bundle;)V
     return-void
 .end method'''
 
+SHIZUKU_PERMISSION = '''
+    <uses-permission android:name="moe.shizuku.manager.permission.API_V23" />
+'''
+
 SHIZUKU_PROVIDER = '''
         <provider
             android:name="rikka.shizuku.ShizukuProvider"
@@ -47,6 +51,12 @@ SHIZUKU_PROVIDER = '''
             android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
 '''
 
+SHIZUKU_METADATA = '''
+        <meta-data
+            android:name="moe.shizuku.client.V3_SUPPORT"
+            android:value="true" />
+'''
+
 
 def digest(text):
     return hashlib.sha256(text.encode()).hexdigest()
@@ -55,17 +65,31 @@ def digest(text):
 def register_shizuku_provider(root, changes):
     path = root / "AndroidManifest.xml"
     before = path.read_text()
-    assert 'package="com.fox.onev8"' in before, "Unexpected package while registering Shizuku"
-    if 'rikka.shizuku.ShizukuProvider' in before:
+    assert 'package="com.fox.onev8"' in before or 'package="com.fox.awg12"' in before, "Unexpected package while registering Shizuku"
+
+    after = before
+    if 'moe.shizuku.manager.permission.API_V23' not in after:
+        manifest_end = after.find('>') + 1
+        assert manifest_end > 0
+        after = after[:manifest_end] + SHIZUKU_PERMISSION + after[manifest_end:]
+
+    if 'moe.shizuku.client.V3_SUPPORT' not in after:
+        assert after.count('</application>') == 1, "Unexpected application manifest shape"
+        after = after.replace('</application>', SHIZUKU_METADATA + '    </application>', 1)
+
+    if 'rikka.shizuku.ShizukuProvider' not in after:
+        assert after.count('</application>') == 1, "Unexpected application manifest shape"
+        after = after.replace('</application>', SHIZUKU_PROVIDER + '    </application>', 1)
+
+    if after == before:
         return
-    assert before.count('</application>') == 1, "Unexpected application manifest shape"
-    after = before.replace('</application>', SHIZUKU_PROVIDER + '    </application>', 1)
+
     path.write_text(after)
     changes.append({
         "file": str(path.relative_to(root)),
         "before": digest(before),
         "after": digest(after),
-        "change": "register_shizuku_provider",
+        "change": "register_shizuku_provider_permission_and_v3_metadata",
     })
 
 
@@ -79,7 +103,6 @@ def repair(root):
         pattern = re.compile(r"(?m)^\.method (?:protected|public) onCreate\(Landroid/os/Bundle;\)V\n.*?^\.end method", re.S)
         matches = list(pattern.finditer(before))
         assert len(matches) == 1, name
-        # Only patch our known experimental wrappers, never an unrelated APK.
         if name == "MainActivity":
             assert "foxOriginalOnCreate" in matches[0].group()
         else:
@@ -87,16 +110,12 @@ def repair(root):
             assert "setContentView" not in matches[0].group()
         after = pattern.sub(lambda _: replacement, before, count=1)
         if name == "MainActivity":
-            # This wrapper only displays DevModz's separate access-key dialog.
-            # It runs before Activity.onCreate and hides the initialized main UI.
             gate = "invoke-static/range {p0 .. p0}, Lcom/ponie/dayov12/۟۟ۦۥۢ;->۟ۦ۟ۦۥ(Ljava/lang/Object;)V"
             assert after.count(gate) == 1
-            # Preserve the original three-code-unit width and all branch offsets.
             after = after.replace(gate, "nop\n    nop\n    nop", 1)
         path.write_text(after)
         changes.append({"file": str(path.relative_to(root)), "before": digest(before), "after": digest(after)})
 
-    # Suppress only the remote update dialog invocation; retain fetch and checks.
     path = root / "smali/androidx/work/impl/workers/ExpDialog$FetchUpdateConfigTask.smali"
     before = path.read_text()
     call = "invoke-static {v0, p1}, Landroidx/work/impl/workers/ExpDialog;->-$$Nest$smshowStyledDialog(Landroid/app/Activity;Lorg/json/JSONObject;)V"
@@ -113,8 +132,6 @@ if __name__ == "__main__":
     parser.add_argument("report", type=Path)
     args = parser.parse_args()
 
-    # Read-only discovery pass. Persist it beside the normal audit output so it
-    # survives GitHub Actions and can be inspected without changing legacy code.
     inspector = Path("scripts/inspect_freeze.py")
     if inspector.exists():
         discovery = subprocess.run(
