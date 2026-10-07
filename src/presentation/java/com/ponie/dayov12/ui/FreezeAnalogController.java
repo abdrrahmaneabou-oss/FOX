@@ -46,6 +46,7 @@ final class FreezeAnalogController {
     private boolean tapCandidate;
     private long firstTapTime;
     private int tapCount;
+    private long relayDownTime;
 
     FreezeAnalogController(Context context) {
         this.context = context.getApplicationContext();
@@ -216,6 +217,7 @@ final class FreezeAnalogController {
         tracking = false;
         pointerId = INVALID_POINTER;
         tapCandidate = false;
+        relayDownTime = 0L;
         view.resetKnob();
         view.postInvalidate();
     }
@@ -270,6 +272,14 @@ final class FreezeAnalogController {
         return Math.max(min, Math.min(max, value));
     }
 
+    private static float pointerRawX(MotionEvent event, int index) {
+        return event.getX(index) + (event.getRawX() - event.getX());
+    }
+
+    private static float pointerRawY(MotionEvent event, int index) {
+        return event.getY(index) + (event.getRawY() - event.getY());
+    }
+
     private final class AnalogTouchListener implements View.OnTouchListener {
         private float editStartRawX;
         private float editStartRawY;
@@ -301,33 +311,65 @@ final class FreezeAnalogController {
 
             final int action = event.getActionMasked();
             final int actionIndex = event.getActionIndex();
+            final boolean trackingBefore = tracking;
+            final int trackedIdBefore = pointerId;
             final int id;
             final float rawX;
             final float rawY;
 
-            if (action == MotionEvent.ACTION_MOVE && tracking) {
-                int index = event.findPointerIndex(pointerId);
+            if (action == MotionEvent.ACTION_MOVE && trackingBefore) {
+                int index = event.findPointerIndex(trackedIdBefore);
                 if (index < 0) return true;
-                id = pointerId;
-                rawX = event.getRawX(index);
-                rawY = event.getRawY(index);
+                id = trackedIdBefore;
+                rawX = pointerRawX(event, index);
+                rawY = pointerRawY(event, index);
+            } else if (action == MotionEvent.ACTION_CANCEL && trackingBefore) {
+                int index = event.findPointerIndex(trackedIdBefore);
+                id = trackedIdBefore;
+                if (index >= 0) {
+                    rawX = pointerRawX(event, index);
+                    rawY = pointerRawY(event, index);
+                } else {
+                    rawX = downX;
+                    rawY = downY;
+                }
             } else {
                 id = event.getPointerId(actionIndex);
-                rawX = event.getRawX(actionIndex);
-                rawY = event.getRawY(actionIndex);
+                rawX = pointerRawX(event, actionIndex);
+                rawY = pointerRawY(event, actionIndex);
             }
 
             boolean handled = onPointer(action, id, rawX, rawY, event.getEventTime());
-            boolean capturedStream = handled || tracking;
+            boolean capturedStream = handled || tracking || trackingBefore;
+            boolean relayThisEvent = handled || (action == MotionEvent.ACTION_MOVE && trackingBefore);
 
             TouchRelay relay = touchRelay;
-            if (relay != null && capturedStream) {
-                MotionEvent copy = MotionEvent.obtain(event);
-                try { relay.relay(copy); }
+            if (relay != null && relayThisEvent) {
+                int relayAction = action;
+                if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN) {
+                    relayAction = MotionEvent.ACTION_DOWN;
+                    relayDownTime = event.getEventTime();
+                } else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_POINTER_UP) {
+                    relayAction = MotionEvent.ACTION_UP;
+                }
+
+                long downTime = relayDownTime != 0L ? relayDownTime : event.getEventTime();
+                MotionEvent relayEvent = MotionEvent.obtain(
+                        downTime,
+                        event.getEventTime(),
+                        relayAction,
+                        rawX,
+                        rawY,
+                        event.getMetaState());
+                try { relay.relay(relayEvent); }
                 catch (RuntimeException relayError) {
                     android.util.Log.w("FreezeAnalog", "Touch relay rejected event", relayError);
                 } finally {
-                    copy.recycle();
+                    relayEvent.recycle();
+                }
+
+                if (relayAction == MotionEvent.ACTION_UP || relayAction == MotionEvent.ACTION_CANCEL) {
+                    relayDownTime = 0L;
                 }
             }
             return capturedStream;
