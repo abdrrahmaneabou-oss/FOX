@@ -5,6 +5,8 @@ import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.RectF;
 import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
@@ -30,6 +32,7 @@ final class FreezeAnalogController {
     private final LegacyFreezeBridge freeze;
     private final FreezeAnalogSettings settings;
     private final AnalogView view;
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final float density;
     private final float tapSlopPx;
 
@@ -37,6 +40,7 @@ final class FreezeAnalogController {
     private SettingsRequestListener settingsListener;
     private boolean shown;
     private boolean tracking;
+    private boolean positionEdit;
     private int pointerId = INVALID_POINTER;
     private float downX;
     private float downY;
@@ -52,6 +56,7 @@ final class FreezeAnalogController {
         this.density = this.context.getResources().getDisplayMetrics().density;
         this.tapSlopPx = 12f * density;
         this.view = new AnalogView(this.context);
+        this.view.setOnTouchListener(new PositionEditTouchListener());
         rebuildParams();
     }
 
@@ -65,7 +70,7 @@ final class FreezeAnalogController {
         try {
             windowManager.addView(view, params);
             shown = true;
-            view.invalidate();
+            view.postInvalidate();
         } catch (RuntimeException e) {
             android.util.Log.e("FreezeAnalog", "Cannot add analog overlay", e);
         }
@@ -73,6 +78,7 @@ final class FreezeAnalogController {
 
     synchronized void hide() {
         cancelHold();
+        positionEdit = false;
         if (!shown) return;
         try { windowManager.removeView(view); }
         catch (RuntimeException ignored) {}
@@ -89,7 +95,7 @@ final class FreezeAnalogController {
      * window below it naturally.
      */
     synchronized boolean onPointer(int action, int id, float rawX, float rawY, long eventTime) {
-        if (!shown) return false;
+        if (!shown || positionEdit) return false;
         switch (action) {
             case MotionEvent.ACTION_DOWN:
             case MotionEvent.ACTION_POINTER_DOWN:
@@ -129,9 +135,23 @@ final class FreezeAnalogController {
         }
     }
 
+    /** Temporarily makes only the analog circle touchable so its base can be dragged. */
+    synchronized void setPositionEdit(boolean enabled) {
+        if (positionEdit == enabled) return;
+        cancelHold();
+        positionEdit = enabled;
+        rebuildParams();
+        applyLayout();
+    }
+
+    synchronized boolean isPositionEdit() { return positionEdit; }
+
     synchronized void setBasePosition(int x, int y, boolean persist) {
-        settings.x = Math.max(0, x);
-        settings.y = Math.max(0, y);
+        int screenW = context.getResources().getDisplayMetrics().widthPixels;
+        int screenH = context.getResources().getDisplayMetrics().heightPixels;
+        int diameter = Math.round(px(settings.baseDp));
+        settings.x = clamp(x, 0, Math.max(0, screenW - diameter));
+        settings.y = clamp(y, 0, Math.max(0, screenH - diameter));
         if (persist) settings.save(context);
         rebuildParams();
         applyLayout();
@@ -150,7 +170,7 @@ final class FreezeAnalogController {
         settings.normalize();
         if (persist) settings.save(context);
         view.resetKnob();
-        view.invalidate();
+        view.postInvalidate();
     }
 
     synchronized int getBaseX() { return settings.x; }
@@ -166,6 +186,7 @@ final class FreezeAnalogController {
     synchronized void shutdown() {
         hide();
         settingsListener = null;
+        mainHandler.removeCallbacksAndMessages(null);
     }
 
     private boolean contains(float rawX, float rawY) {
@@ -182,7 +203,7 @@ final class FreezeAnalogController {
         float centerY = settings.y + baseRadius;
         float[] offset = view.offset;
         FreezeAnalogGeometry.clamp(rawX - centerX, rawY - centerY, baseRadius, knobRadius, offset);
-        view.invalidate();
+        view.postInvalidate();
     }
 
     private void finishHold() {
@@ -191,7 +212,7 @@ final class FreezeAnalogController {
         pointerId = INVALID_POINTER;
         tapCandidate = false;
         view.resetKnob();
-        view.invalidate();
+        view.postInvalidate();
     }
 
     private void cancelHold() {
@@ -200,7 +221,7 @@ final class FreezeAnalogController {
         pointerId = INVALID_POINTER;
         tapCandidate = false;
         view.resetKnob();
-        view.invalidate();
+        view.postInvalidate();
     }
 
     private void registerTap(long eventTime) {
@@ -213,8 +234,10 @@ final class FreezeAnalogController {
         if (tapCount < 3) return;
         tapCount = 0;
         firstTapTime = 0L;
-        SettingsRequestListener listener = settingsListener;
-        if (listener != null) listener.onFreezeAnalogSettingsRequested(this);
+        final SettingsRequestListener listener = settingsListener;
+        if (listener != null) {
+            mainHandler.post(() -> listener.onFreezeAnalogSettingsRequested(FreezeAnalogController.this));
+        }
     }
 
     private void rebuildParams() {
@@ -223,8 +246,8 @@ final class FreezeAnalogController {
                 ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
                 : WindowManager.LayoutParams.TYPE_PHONE;
         int flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-                | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
                 | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS;
+        if (!positionEdit) flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
         WindowManager.LayoutParams next = new WindowManager.LayoutParams(
                 diameter, diameter, type, flags, android.graphics.PixelFormat.TRANSLUCENT);
         next.gravity = Gravity.TOP | Gravity.START;
@@ -235,7 +258,7 @@ final class FreezeAnalogController {
 
     private void applyLayout() {
         view.resetKnob();
-        view.invalidate();
+        view.postInvalidate();
         if (!shown) return;
         try { windowManager.updateViewLayout(view, params); }
         catch (RuntimeException e) { android.util.Log.e("FreezeAnalog", "Cannot update analog overlay", e); }
@@ -245,6 +268,40 @@ final class FreezeAnalogController {
 
     private static float distance(float dx, float dy) {
         return (float) Math.sqrt(dx * dx + dy * dy);
+    }
+
+    private static int clamp(int value, int min, int max) {
+        return Math.max(min, Math.min(max, value));
+    }
+
+    private final class PositionEditTouchListener implements View.OnTouchListener {
+        private float startRawX;
+        private float startRawY;
+        private int startBaseX;
+        private int startBaseY;
+
+        @Override public boolean onTouch(View ignored, MotionEvent event) {
+            if (!positionEdit) return false;
+            switch (event.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    startRawX = event.getRawX();
+                    startRawY = event.getRawY();
+                    startBaseX = settings.x;
+                    startBaseY = settings.y;
+                    return true;
+                case MotionEvent.ACTION_MOVE:
+                    setBasePosition(
+                            startBaseX + Math.round(event.getRawX() - startRawX),
+                            startBaseY + Math.round(event.getRawY() - startRawY),
+                            false);
+                    return true;
+                case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_CANCEL:
+                    return true;
+                default:
+                    return true;
+            }
+        }
     }
 
     private final class AnalogView extends View {
