@@ -7,8 +7,6 @@ import subprocess
 import zipfile
 from pathlib import Path
 
-from prepare_binary_manifest import prepare as prepare_manifest
-
 p = argparse.ArgumentParser()
 p.add_argument("baseline", type=Path)
 p.add_argument("rebuilt", type=Path)
@@ -25,17 +23,16 @@ if manifest_apk is None:
     android_home = Path(os.environ["ANDROID_HOME"])
     build_tools = android_home / "build-tools/35.0.0"
     android_jar = android_home / "platforms/android-35/android.jar"
-    prepared = Path("work/manifest-for-aapt.xml")
     manifest_apk = Path("work/manifest-only.apk")
-    prepare_manifest(
-        Path("work/decoded/AndroidManifest.xml"),
-        Path("work/manifest-decoded/res/values/public.xml"),
-        prepared,
-    )
+
+    # Compile only the merged manifest. Use FOX itself as an include so aapt2 can
+    # resolve the app's existing @mipmap/@style/etc references against the original
+    # compiled resources table. This avoids rebuilding any FOX resource files.
     subprocess.run([
         str(build_tools / "aapt2"), "link",
         "-I", str(android_jar),
-        "--manifest", str(prepared),
+        "-I", str(a.baseline),
+        "--manifest", "work/decoded/AndroidManifest.xml",
         "-o", str(manifest_apk),
     ], check=True)
 
