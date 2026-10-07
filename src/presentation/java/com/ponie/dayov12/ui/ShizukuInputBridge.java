@@ -59,16 +59,17 @@ final class ShizukuInputBridge {
         remote = null;
         notifyReady(false);
     };
-    private final Shizuku.OnRequestPermissionResultListener permissionListener = (code, result) -> {
-        if (code != REQUEST_CODE) return;
-        permissionRequested = false;
-        if (result == PackageManager.PERMISSION_GRANTED) bind();
-        else if (listener != null) listener.onInputBridgePermissionDenied();
-    };
+    private final Shizuku.OnRequestPermissionResultListener permissionListener;
 
     ShizukuInputBridge(Context context, Listener listener) {
         Context app = context.getApplicationContext();
         this.listener = listener;
+        permissionListener = (code, result) -> {
+            if (code != REQUEST_CODE) return;
+            permissionRequested = false;
+            if (result == PackageManager.PERMISSION_GRANTED) bind();
+            else if (this.listener != null) this.listener.onInputBridgePermissionDenied();
+        };
         args = new Shizuku.UserServiceArgs(
                 new ComponentName(app.getPackageName(), PrivilegedInputService.class.getName()))
                 .daemon(false)
