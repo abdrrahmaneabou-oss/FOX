@@ -25,7 +25,7 @@ LOGIN = '''.method protected onCreate(Landroid/os/Bundle;)V
 .end method'''
 
 MAIN = '''.method public onCreate(Landroid/os/Bundle;)V
-    .locals 4
+    .locals 5
     const-wide/16 v2, 0x2
     sput-wide v2, Lcom/ponie/dayov12/LoginActivity;->key:J
     invoke-virtual {p0}, Landroid/app/Activity;->getIntent()Landroid/content/Intent;
@@ -33,7 +33,22 @@ MAIN = '''.method public onCreate(Landroid/os/Bundle;)V
     const-string v1, "key_auth_check"
     invoke-virtual {v0, v1, v2, v3}, Landroid/content/Intent;->putExtra(Ljava/lang/String;J)Landroid/content/Intent;
     invoke-virtual {p0, p1}, Lcom/ponie/dayov12/MainActivity;->foxOriginalOnCreate(Landroid/os/Bundle;)V
+
+    :try_start_fox_ui
     invoke-static {p0}, Lcom/ponie/dayov12/FoxAwgUi;->attach(Landroid/app/Activity;)V
+    :try_end_fox_ui
+    goto :fox_ui_done
+
+    .catch Ljava/lang/Throwable; {:try_start_fox_ui .. :try_end_fox_ui} :catch_fox_ui
+
+    :catch_fox_ui
+    move-exception v4
+    const-string v0, "FoxStartup"
+    const-string v1, "Presentation attach failed"
+    invoke-static {v0, v1, v4}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;Ljava/lang/Throwable;)I
+    move-result v0
+
+    :fox_ui_done
     return-void
 .end method'''
 
