@@ -6,8 +6,10 @@ import android.os.IBinder;
 import android.os.Parcel;
 import android.os.Process;
 import android.os.RemoteException;
+import android.util.Log;
 import android.view.MotionEvent;
 import java.lang.reflect.Method;
+import rikka.shizuku.ShizukuProvider;
 
 /**
  * Shizuku UserService side of the Freeze analog touch relay.
@@ -31,6 +33,25 @@ public final class PrivilegedInputService extends Binder {
 
     private volatile TouchInjector injector;
 
+    /**
+     * Android creates content providers before the first Activity. Shizuku's stock
+     * provider also probes Sui from onCreate(), which is unnecessary for FOX and
+     * can fail on vendor Android builds before our UI has a chance to recover.
+     * Keep the normal Shizuku provider protocol, but disable Sui probing and make
+     * provider startup non-fatal. Binder delivery through call() remains inherited.
+     */
+    public static final class SafeShizukuProvider extends ShizukuProvider {
+        @Override public boolean onCreate() {
+            try {
+                ShizukuProvider.disableAutomaticSuiInitialization();
+                return super.onCreate();
+            } catch (Throwable error) {
+                Log.e("FoxShizukuProvider", "Shizuku provider startup failed safely", error);
+                return true;
+            }
+        }
+    }
+
     public PrivilegedInputService() {
         injector = createInjector();
     }
@@ -40,153 +61,46 @@ public final class PrivilegedInputService extends Binder {
         this();
     }
 
-    @Override protected boolean onTransact(int code, Parcel data, Parcel reply, int flags)
-            throws RemoteException {
-        if (code == INTERFACE_TRANSACTION) {
-            if (reply != null) reply.writeString(DESCRIPTOR);
-            return true;
-        }
-        if (code == TRANSACTION_PROBE) {
-            data.enforceInterface(DESCRIPTOR);
-            int capability = probeCapability();
-            if (reply != null) {
-                reply.writeNoException();
-                reply.writeInt(capability);
-            }
-            return true;
-        }
-        if (code == TRANSACTION_TOUCH) {
-            data.enforceInterface(DESCRIPTOR);
-            int action = data.readInt();
-            data.readLong(); // downTime is kept in the app state machine; Nubia path uses action/x/y.
-            data.readLong(); // eventTime
-            float x = data.readFloat();
-            float y = data.readFloat();
-            inject(action, x, y);
-            return true;
-        }
-        return super.onTransact(code, data, reply, flags);
-    }
-
-    private int probeCapability() {
-        if (Process.myUid() != SHELL_UID) return 0;
-        TouchInjector current = injector;
-        if (current == null) {
-            current = createInjector();
-            injector = current;
-        }
-        return current == null ? 0 : current.kind();
-    }
-
-    private void inject(int androidAction, float x, float y) {
-        if (Process.myUid() != SHELL_UID) {
-            injector = null;
-            return;
-        }
-        int vendorAction = toNubiaAction(androidAction);
-        if (vendorAction < 0 || !Float.isFinite(x) || !Float.isFinite(y)) return;
-
-        TouchInjector current = injector;
-        if (current == null) current = createInjector();
-        if (current == null) return;
-
-        try {
-            current.send(vendorAction, Math.round(x), Math.round(y));
-            injector = current;
-            return;
-        } catch (Throwable directFailure) {
-            android.util.Log.w("FoxShizukuInput", "Primary Nubia input path failed", directFailure);
-        }
-
-        // Direct transaction numbers are vendor implementation details. If a ROM build
-        // changes tx=126, retry the same event through the vendor reflection method.
-        TouchInjector fallback = ReflectionNubiaInjector.create();
-        if (fallback != null && fallback.getClass() != current.getClass()) {
-            try {
-                fallback.send(vendorAction, Math.round(x), Math.round(y));
-                injector = fallback;
-                return;
-            } catch (Throwable reflectionFailure) {
-                android.util.Log.e("FoxShizukuInput", "Nubia reflection path failed", reflectionFailure);
-            }
-        }
-        injector = null;
-    }
-
-    private static int toNubiaAction(int androidAction) {
-        switch (androidAction) {
-            case MotionEvent.ACTION_DOWN:
-            case MotionEvent.ACTION_POINTER_DOWN:
-                return 0;
-            case MotionEvent.ACTION_MOVE:
-                return 1;
-            case MotionEvent.ACTION_UP:
-            case MotionEvent.ACTION_POINTER_UP:
-            case MotionEvent.ACTION_CANCEL:
-                return 2;
-            default:
-                return -1;
-        }
-    }
-
-    private static TouchInjector createInjector() {
-        if (Process.myUid() != SHELL_UID) {
-            android.util.Log.e("FoxShizukuInput", "UserService uid is not shell: " + Process.myUid());
-            return null;
-        }
-        TouchInjector direct = DirectBinderInjector.create();
-        if (direct != null) return direct;
-        return ReflectionNubiaInjector.create();
-    }
-
     private interface TouchInjector {
-        /** 2 = direct vendor Binder, 1 = reflected vendor method. */
+        boolean isAvailable();
+        boolean inject(MotionEvent event);
         int kind();
-        void send(int vendorAction, int x, int y) throws Exception;
     }
 
-    /** Fast REDMAGIC/Nubia path: IInputManager transaction 126. */
-    private static final class DirectBinderInjector implements TouchInjector {
-        private final IBinder input;
+    private static final class NubiaVirtualTouchInjector implements TouchInjector {
+        private final IBinder inputManager;
 
-        private DirectBinderInjector(IBinder input) {
-            this.input = input;
+        NubiaVirtualTouchInjector() {
+            inputManager = getInputManagerBinder();
         }
 
-        static TouchInjector create() {
-            try {
-                Class<?> serviceManager = Class.forName("android.os.ServiceManager");
-                Method getService = serviceManager.getDeclaredMethod("getService", String.class);
-                getService.setAccessible(true);
-                Object value = getService.invoke(null, "input");
-                if (!(value instanceof IBinder)) return null;
-                IBinder binder = (IBinder) value;
-                if (!INPUT_DESCRIPTOR.equals(binder.getInterfaceDescriptor())) return null;
-                return new DirectBinderInjector(binder);
-            } catch (Throwable error) {
-                android.util.Log.w("FoxShizukuInput", "Direct IInputManager path unavailable", error);
-                return null;
-            }
+        @Override public boolean isAvailable() {
+            return inputManager != null && inputManager.pingBinder();
         }
 
-        @Override public int kind() { return 2; }
+        @Override public int kind() { return 1; }
 
-        @Override public void send(int vendorAction, int x, int y) throws Exception {
+        @Override public boolean inject(MotionEvent event) {
+            if (!isAvailable()) return false;
             Parcel data = Parcel.obtain();
             Parcel reply = Parcel.obtain();
             try {
                 data.writeInterfaceToken(INPUT_DESCRIPTOR);
+                data.writeTypedObject(event, 0);
                 data.writeInt(NUBIA_KEY_CODE);
-                data.writeInt(vendorAction);
                 data.writeInt(NUBIA_MODE);
                 data.writeInt(NUBIA_GAMEPAD_ID);
-                data.writeInt(x);
-                data.writeInt(y);
-                boolean handled = input.transact(
-                        NUBIA_TRANSACTION_VIRTUAL_TOUCH, data, reply, 0);
-                if (!handled) throw new UnsupportedOperationException(
-                        "IInputManager transaction 126 not handled");
+                boolean handled = inputManager.transact(
+                        NUBIA_TRANSACTION_VIRTUAL_TOUCH,
+                        data,
+                        reply,
+                        0);
+                if (!handled) return false;
                 reply.readException();
+                return true;
+            } catch (Throwable error) {
+                Log.w("FoxShizukuInput", "Nubia virtual touch failed", error);
+                return false;
             } finally {
                 reply.recycle();
                 data.recycle();
@@ -194,45 +108,174 @@ public final class PrivilegedInputService extends Binder {
         }
     }
 
-    /** Cached fallback for Nubia's hidden InputManager.virtualTouchEvent method. */
-    private static final class ReflectionNubiaInjector implements TouchInjector {
-        private final Object inputManager;
-        private final Method method;
+    private static final class ReflectionInjector implements TouchInjector {
+        private Object inputManager;
+        private Method inject;
 
-        private ReflectionNubiaInjector(Object inputManager, Method method) {
-            this.inputManager = inputManager;
-            this.method = method;
-        }
-
-        static TouchInjector create() {
+        ReflectionInjector() {
             try {
-                Class<?> inputManagerClass = Class.forName("android.hardware.input.InputManager");
-                Method getInstance = inputManagerClass.getDeclaredMethod("getInstance");
-                getInstance.setAccessible(true);
-                Object inputManager = getInstance.invoke(null);
-                if (inputManager == null) return null;
-                Method eventMethod = inputManagerClass.getDeclaredMethod(
-                        "virtualTouchEvent",
-                        int.class, int.class, int.class,
-                        int.class, int.class, int.class);
-                eventMethod.setAccessible(true);
-                return new ReflectionNubiaInjector(inputManager, eventMethod);
-            } catch (Throwable error) {
-                android.util.Log.w("FoxShizukuInput", "Nubia virtualTouchEvent unavailable", error);
-                return null;
+                Class<?> global = Class.forName("android.hardware.input.InputManagerGlobal");
+                Method get = global.getDeclaredMethod("getInstance");
+                get.setAccessible(true);
+                inputManager = get.invoke(null);
+                inject = global.getDeclaredMethod("injectInputEvent", android.view.InputEvent.class, int.class);
+                inject.setAccessible(true);
+            } catch (Throwable ignored) {
+                inputManager = null;
+                inject = null;
             }
         }
 
-        @Override public int kind() { return 1; }
-
-        @Override public void send(int vendorAction, int x, int y) throws Exception {
-            method.invoke(inputManager,
-                    NUBIA_KEY_CODE,
-                    vendorAction,
-                    NUBIA_MODE,
-                    NUBIA_GAMEPAD_ID,
-                    x,
-                    y);
+        @Override public boolean isAvailable() {
+            return inputManager != null && inject != null;
         }
+
+        @Override public int kind() { return 2; }
+
+        @Override public boolean inject(MotionEvent event) {
+            if (!isAvailable()) return false;
+            try {
+                Object result = inject.invoke(inputManager, event, 0);
+                return !(result instanceof Boolean) || (Boolean) result;
+            } catch (Throwable error) {
+                Log.w("FoxShizukuInput", "Reflection injection failed", error);
+                return false;
+            }
+        }
+    }
+
+    private static final class DirectBinderInjector implements TouchInjector {
+        private final IBinder inputManager;
+        private final int transaction;
+
+        DirectBinderInjector() {
+            inputManager = getInputManagerBinder();
+            transaction = findInjectTransaction();
+        }
+
+        @Override public boolean isAvailable() {
+            return inputManager != null && inputManager.pingBinder() && transaction > 0;
+        }
+
+        @Override public int kind() { return 3; }
+
+        @Override public boolean inject(MotionEvent event) {
+            if (!isAvailable()) return false;
+            Parcel data = Parcel.obtain();
+            Parcel reply = Parcel.obtain();
+            try {
+                data.writeInterfaceToken(INPUT_DESCRIPTOR);
+                data.writeTypedObject(event, 0);
+                data.writeInt(0);
+                boolean handled = inputManager.transact(transaction, data, reply, 0);
+                if (!handled) return false;
+                reply.readException();
+                return true;
+            } catch (Throwable error) {
+                Log.w("FoxShizukuInput", "Direct binder injection failed", error);
+                return false;
+            } finally {
+                reply.recycle();
+                data.recycle();
+            }
+        }
+    }
+
+    private static IBinder getInputManagerBinder() {
+        try {
+            Class<?> manager = Class.forName("android.os.ServiceManager");
+            Method getService = manager.getDeclaredMethod("getService", String.class);
+            getService.setAccessible(true);
+            return (IBinder) getService.invoke(null, "input");
+        } catch (Throwable error) {
+            Log.w("FoxShizukuInput", "Cannot obtain input service", error);
+            return null;
+        }
+    }
+
+    private static int findInjectTransaction() {
+        try {
+            Class<?> stub = Class.forName("android.hardware.input.IInputManager$Stub");
+            java.lang.reflect.Field field = stub.getDeclaredField("TRANSACTION_injectInputEvent");
+            field.setAccessible(true);
+            return field.getInt(null);
+        } catch (Throwable ignored) {
+            return 0;
+        }
+    }
+
+    private TouchInjector createInjector() {
+        TouchInjector nubia = new NubiaVirtualTouchInjector();
+        if (nubia.isAvailable()) return nubia;
+
+        TouchInjector direct = new DirectBinderInjector();
+        if (direct.isAvailable()) return direct;
+
+        TouchInjector reflection = new ReflectionInjector();
+        if (reflection.isAvailable()) return reflection;
+
+        return new TouchInjector() {
+            @Override public boolean isAvailable() { return false; }
+            @Override public boolean inject(MotionEvent event) { return false; }
+            @Override public int kind() { return 0; }
+        };
+    }
+
+    private boolean inject(int action, long downTime, long eventTime, float x, float y) {
+        TouchInjector current = injector;
+        if (current == null || !current.isAvailable()) {
+            current = createInjector();
+            injector = current;
+        }
+        if (!current.isAvailable()) return false;
+
+        int normalizedAction = action == MotionEvent.ACTION_CANCEL
+                ? MotionEvent.ACTION_UP : action;
+        MotionEvent event = MotionEvent.obtain(
+                downTime,
+                eventTime,
+                normalizedAction,
+                x,
+                y,
+                0);
+        event.setSource(android.view.InputDevice.SOURCE_TOUCHSCREEN);
+        try {
+            return current.inject(event);
+        } finally {
+            event.recycle();
+        }
+    }
+
+    private int probe() {
+        TouchInjector current = injector;
+        if (current == null || !current.isAvailable()) {
+            current = createInjector();
+            injector = current;
+        }
+        return current.kind();
+    }
+
+    @Override protected boolean onTransact(int code, Parcel data, Parcel reply, int flags)
+            throws RemoteException {
+        if (code == TRANSACTION_TOUCH) {
+            data.enforceInterface(DESCRIPTOR);
+            int action = data.readInt();
+            long downTime = data.readLong();
+            long eventTime = data.readLong();
+            float x = data.readFloat();
+            float y = data.readFloat();
+            boolean ok = inject(action, downTime, eventTime, x, y);
+            if (reply != null) reply.writeInt(ok ? 1 : 0);
+            return true;
+        }
+        if (code == TRANSACTION_PROBE) {
+            data.enforceInterface(DESCRIPTOR);
+            if (reply != null) {
+                reply.writeNoException();
+                reply.writeInt(probe());
+            }
+            return true;
+        }
+        return super.onTransact(code, data, reply, flags);
     }
 }
