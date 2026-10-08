@@ -18,6 +18,7 @@ GATE = ("Lcom/ponie/dayov12/MainActivity;", "foxOriginalOnCreate", "(Landroid/os
 UPDATE = ("Landroidx/work/impl/workers/ExpDialog$FetchUpdateConfigTask;", "onPostExecute", "(Lorg/json/JSONObject;)V")
 MOTION = ("Lcom/ponie/dayov12/MainActivity;", "isReducedMotionEnabled", "()Z")
 ANDROID = "{http://schemas.android.com/apk/res/android}"
+FOX_SHIZUKU_PROVIDER = "com.ponie.dayov12.ui.PrivilegedInputService$SafeShizukuProvider"
 
 
 def presentation(key):
@@ -62,14 +63,18 @@ def audit_manifest(before_bytes, after_bytes):
     new_components = components(after_app)
     assert old_components <= new_components, "Existing manifest component removed"
     extras = new_components - old_components
-    assert extras == {("provider", "rikka.shizuku.ShizukuProvider")}, extras
+    assert extras == {("provider", FOX_SHIZUKU_PROVIDER)}, extras
 
     providers = [
         node for node in after_app.findall("provider")
-        if node.get(ANDROID + "name") == "rikka.shizuku.ShizukuProvider"
+        if node.get(ANDROID + "name") == FOX_SHIZUKU_PROVIDER
     ]
     assert len(providers) == 1
-    assert providers[0].get(ANDROID + "authorities") == "com.fox.onev8.shizuku"
+    provider = providers[0]
+    assert provider.get(ANDROID + "authorities") == "com.fox.onev8.shizuku"
+    assert provider.get(ANDROID + "exported") == "true"
+    assert provider.get(ANDROID + "multiprocess") == "false"
+    assert provider.get(ANDROID + "permission") == "android.permission.INTERACT_ACROSS_USERS_FULL"
 
     old_permissions = {n.get(ANDROID + "name") for n in before.findall("uses-permission")}
     new_permissions = {n.get(ANDROID + "name") for n in after.findall("uses-permission")}
@@ -145,7 +150,7 @@ def audit(baseline, final):
             "verified_apk_entry_count": len(unchanged),
             "native_and_packet_logic_unchanged": True,
             "restored_package": "com.fox.onev8",
-            "manifest_changes": "ShizukuProvider and Shizuku client permissions only",
+            "manifest_changes": "FOX fail-safe ShizukuProvider and Shizuku client permissions only",
             "shizuku_permissions_added": added_permissions,
             "zip_resource_names_restored": len(restored_names),
             "sha256": hashlib.sha256(final.read_bytes()).hexdigest(),
