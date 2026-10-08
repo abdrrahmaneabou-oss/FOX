@@ -3,9 +3,9 @@
 
 This project deliberately builds without Gradle, so AAR manifest merging has to be
 performed explicitly. Shizuku's provider AAR does not register ShizukuProvider in
-its own manifest; the client application is expected to declare it. We therefore
-merge the library permissions/meta-data and add the provider exactly as documented
-by Shizuku.
+its own manifest; the client application is expected to declare it. FOX uses a
+small provider wrapper that disables optional Sui probing during process startup
+while preserving Shizuku's normal binder-delivery protocol.
 """
 import argparse
 import copy
@@ -15,6 +15,7 @@ from pathlib import Path
 ANDROID = "http://schemas.android.com/apk/res/android"
 ET.register_namespace("android", ANDROID)
 NAME = "{%s}name" % ANDROID
+FOX_PROVIDER = "com.ponie.dayov12.ui.PrivilegedInputService$SafeShizukuProvider"
 
 
 def key(node):
@@ -33,14 +34,14 @@ def ensure_shizuku_provider(app, application_id):
     providers = [
         n for n in list(app)
         if n.tag.split('}')[-1] == "provider"
-        and n.attrib.get(NAME) == "rikka.shizuku.ShizukuProvider"
+        and n.attrib.get(NAME) in ("rikka.shizuku.ShizukuProvider", FOX_PROVIDER)
     ]
     if len(providers) > 1:
         raise RuntimeError("Multiple ShizukuProvider declarations in target manifest")
 
     if not providers:
         provider = ET.Element("provider")
-        provider.set(NAME, "rikka.shizuku.ShizukuProvider")
+        provider.set(NAME, FOX_PROVIDER)
         provider.set("{%s}authorities" % ANDROID, application_id + ".shizuku")
         provider.set("{%s}enabled" % ANDROID, "true")
         provider.set("{%s}exported" % ANDROID, "true")
@@ -50,6 +51,7 @@ def ensure_shizuku_provider(app, application_id):
         providers = [provider]
 
     provider = providers[0]
+    provider.set(NAME, FOX_PROVIDER)
     authority = provider.attrib.get("{%s}authorities" % ANDROID, "")
     if authority != application_id + ".shizuku":
         raise RuntimeError("ShizukuProvider authority is not bound to FOX package")
@@ -81,7 +83,6 @@ def merge(target_path, library_paths):
             elif local in ("uses-permission", "permission"):
                 merged = substitute(child, application_id)
                 if key(merged) not in top_keys:
-                    # Permissions belong before <application> for predictable output.
                     index = list(root).index(app)
                     root.insert(index, merged)
                     top_keys.add(key(merged))
