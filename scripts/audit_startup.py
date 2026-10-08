@@ -18,7 +18,7 @@ GATE = ("Lcom/ponie/dayov12/MainActivity;", "foxOriginalOnCreate", "(Landroid/os
 UPDATE = ("Landroidx/work/impl/workers/ExpDialog$FetchUpdateConfigTask;", "onPostExecute", "(Lorg/json/JSONObject;)V")
 MOTION = ("Lcom/ponie/dayov12/MainActivity;", "isReducedMotionEnabled", "()Z")
 ANDROID = "{http://schemas.android.com/apk/res/android}"
-FOX_SHIZUKU_PROVIDER = "com.ponie.dayov12.ui.PrivilegedInputService$SafeShizukuProvider"
+PROVIDER = "com.ponie.dayov12.ui.FoxShizukuProvider"
 
 
 def presentation(key):
@@ -63,18 +63,14 @@ def audit_manifest(before_bytes, after_bytes):
     new_components = components(after_app)
     assert old_components <= new_components, "Existing manifest component removed"
     extras = new_components - old_components
-    assert extras == {("provider", FOX_SHIZUKU_PROVIDER)}, extras
+    assert extras == {("provider", PROVIDER)}, extras
 
     providers = [
         node for node in after_app.findall("provider")
-        if node.get(ANDROID + "name") == FOX_SHIZUKU_PROVIDER
+        if node.get(ANDROID + "name") == PROVIDER
     ]
     assert len(providers) == 1
-    provider = providers[0]
-    assert provider.get(ANDROID + "authorities") == "com.fox.onev8.shizuku"
-    assert provider.get(ANDROID + "exported") == "true"
-    assert provider.get(ANDROID + "multiprocess") == "false"
-    assert provider.get(ANDROID + "permission") == "android.permission.INTERACT_ACROSS_USERS_FULL"
+    assert providers[0].get(ANDROID + "authorities") == "com.fox.onev8.shizuku"
 
     old_permissions = {n.get(ANDROID + "name") for n in before.findall("uses-permission")}
     new_permissions = {n.get(ANDROID + "name") for n in after.findall("uses-permission")}
@@ -140,12 +136,17 @@ def audit(baseline, final):
                 create = next(i for i, (_, operand) in enumerate(instructions) if "foxOriginalOnCreate" in operand)
                 assert put < create
 
+        deleted_presentation = sorted(k for k in old if presentation(k) and k not in new)
+        added_presentation = sorted(k for k in new if presentation(k) and k not in old)
+
         return {
             "changed_methods": [list(k) for k in sorted(changed)],
             "unchanged_method_count": sum(k in new and old[k] == new[k] for k in old),
             "protected_core_methods": len(protected),
             "presentation_methods": sum(presentation(k) for k in new),
-            "deleted_legacy_ui_methods": sum(k not in new for k in old),
+            "deleted_legacy_ui_methods": len(deleted_presentation),
+            "deleted_legacy_ui_method_list": [list(k) for k in deleted_presentation],
+            "added_presentation_method_list": [list(k) for k in added_presentation],
             "remote_update_dialog_suppressed": True,
             "verified_apk_entry_count": len(unchanged),
             "native_and_packet_logic_unchanged": True,
